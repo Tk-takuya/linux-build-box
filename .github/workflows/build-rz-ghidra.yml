@@ -16,10 +16,9 @@ jobs:
           uname -a
           lsb_release -a || cat /etc/os-release
 
-      - name: Clone Rizin/Cutter/rz-ghidra sources
+      - name: Clone Rizin and rz-ghidra sources
         run: |
           git clone --recursive --branch dev https://github.com/rizinorg/rizin.git rizin-src
-          git clone --recursive --branch dev https://github.com/rizinorg/cutter.git cutter-src
           git clone --recursive --branch dev https://github.com/rizinorg/rz-ghidra.git rz-ghidra-src
 
       - name: Install build dependencies
@@ -36,14 +35,6 @@ jobs:
             libssl-dev \
             libzip-dev \
             zlib1g-dev \
-            qt6-base-dev \
-            qt6-tools-dev \
-            qt6-tools-dev-tools \
-            libqt6svg6-dev \
-            libqt6core5compat6-dev \
-            libqt6svgwidgets6 \
-            qt6-l10n-tools \
-            libgraphviz-dev \
             capstone-tool \
             libcapstone-dev
 
@@ -71,57 +62,30 @@ jobs:
           out/bin/rz-diff -v
           out/bin/rz-ax -v
 
-      - name: Build and install Cutter against built Rizin
-        working-directory: cutter-src
+      - name: Inspect built Rizin prefix
         env:
           RIZIN_PREFIX: ${{ github.workspace }}/rizin-src/out
         run: |
           echo "RIZIN_PREFIX=$RIZIN_PREFIX"
-
-          echo "==== inspect built rizin prefix ===="
           find "$RIZIN_PREFIX" -maxdepth 5 -type f | sort | sed -n '1,300p'
-
+          echo "==== pkg-config entries ===="
           export PKG_CONFIG_PATH="$RIZIN_PREFIX/lib/pkgconfig:$RIZIN_PREFIX/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}"
-          export CMAKE_PREFIX_PATH="$RIZIN_PREFIX${CMAKE_PREFIX_PATH+:$CMAKE_PREFIX_PATH}"
-
-          echo "==== pkg-config probe ===="
-          pkg-config --list-all | grep -i rizin || true
-          pkg-config --cflags rizin || true
-          pkg-config --libs rizin || true
+          pkg-config --list-all | grep -i '^rz_' || true
           find "$RIZIN_PREFIX" -type f \( -name '*.pc' -o -name '*Config.cmake' -o -name '*Targets.cmake' \) | sort | sed -n '1,300p' || true
 
-          echo "==== cmake configure cutter ===="
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/out" \
-            -DCUTTER_USE_BUNDLED_RIZIN=OFF \
-            -DCMAKE_PREFIX_PATH="$RIZIN_PREFIX"
-
-          echo "==== cmake build cutter ===="
-          cmake --build build -j"$(nproc)" --verbose
-
-          echo "==== cmake install cutter ===="
-          cmake --install build
-
-          test -x out/bin/cutter || test -x out/bin/Cutter
-
-      - name: Build and install rz-ghidra
+      - name: Build and install rz-ghidra for Rizin only
         working-directory: rz-ghidra-src
         env:
           RIZIN_PREFIX: ${{ github.workspace }}/rizin-src/out
-          CUTTER_PREFIX: ${{ github.workspace }}/cutter-src/out
         run: |
-          echo "RIZIN_PREFIX=$RIZIN_PREFIX"
-          echo "CUTTER_PREFIX=$CUTTER_PREFIX"
-
           mkdir -p build
           cd build
 
           cmake .. -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$PWD/../out" \
-            -DCMAKE_PREFIX_PATH="$RIZIN_PREFIX;$CUTTER_PREFIX" \
-            -DBUILD_CUTTER_PLUGIN=ON
+            -DCMAKE_PREFIX_PATH="$RIZIN_PREFIX" \
+            -DBUILD_CUTTER_PLUGIN=OFF
 
           cmake --build . -j"$(nproc)" --verbose
           cmake --install .
@@ -132,15 +96,12 @@ jobs:
           mkdir -p bundle
 
           cp -a rizin-src/out/. bundle/
-          cp -a cutter-src/out/. bundle/
 
           mkdir -p bundle/rz-ghidra-install
           cp -a rz-ghidra-src/out/. bundle/rz-ghidra-install/
 
           mkdir -p bundle/lib/rizin/plugins
           mkdir -p bundle/share/rizin
-
-          find rz-ghidra-src/out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -print -exec cp -a {} bundle/lib/rizin/plugins/ \; || true
 
           if [ -d rz-ghidra-src/out/share/rizin ]; then
             cp -a rz-ghidra-src/out/share/rizin/. bundle/share/rizin/
@@ -155,6 +116,7 @@ jobs:
             cp -a rz-ghidra-src/out/lib/x86_64-linux-gnu/rizin/plugins/. bundle/lib/x86_64-linux-gnu/rizin/plugins/
           fi
 
+          find rz-ghidra-src/out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -print || true
           find bundle -maxdepth 5 -type f | sort | sed -n '1,400p'
 
       - name: Inspect plugin files
@@ -165,7 +127,7 @@ jobs:
           echo "==== share/rizin ===="
           find bundle/share/rizin -maxdepth 4 -type f | sort | sed -n '1,240p' || true
 
-      - name: Prepare wrappers
+      - name: Prepare wrapper
         run: |
           cat > bundle/run-rizin.sh << 'EOF'
           #!/usr/bin/env bash
@@ -178,20 +140,6 @@ jobs:
           exec "$HERE/bin/rizin" "$@"
           EOF
           chmod +x bundle/run-rizin.sh
-
-          cat > bundle/run-cutter.sh << 'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          HERE="$(cd "$(dirname "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$HERE/lib:$HERE/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
-          export QT_PLUGIN_PATH="$HERE/plugins${QT_PLUGIN_PATH+:$QT_PLUGIN_PATH}"
-          export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/plugins/platforms${QT_QPA_PLATFORM_PLUGIN_PATH+:$QT_QPA_PLATFORM_PLUGIN_PATH}"
-          export RZ_LIBR_PLUGINS="$HERE/lib/rizin/plugins${RZ_LIBR_PLUGINS+:$RZ_LIBR_PLUGINS}"
-          export RZ_EXTRA_PLUGINS="$HERE/lib/x86_64-linux-gnu/rizin/plugins${RZ_EXTRA_PLUGINS+:$RZ_EXTRA_PLUGINS}"
-          export RZ_USER_PLUGINS="$HERE/lib/rizin/plugins${RZ_USER_PLUGINS+:$RZ_USER_PLUGINS}"
-          exec "$HERE/bin/cutter" "$@"
-          EOF
-          chmod +x bundle/run-cutter.sh
 
       - name: Smoke test raw rizin ldd
         run: |
@@ -213,20 +161,6 @@ jobs:
 
           echo "==== pdgs probe ===="
           bundle/bin/rizin -q -c "pdgs" - || true
-
-      - name: Smoke test Cutter ldd with bundle env
-        run: |
-          CUTTER_BIN="bundle/bin/cutter"
-          if [ ! -x "$CUTTER_BIN" ]; then
-            CUTTER_BIN="bundle/bin/Cutter"
-          fi
-          test -x "$CUTTER_BIN"
-
-          export LD_LIBRARY_PATH="$PWD/bundle/lib:$PWD/bundle/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
-          ldd "$CUTTER_BIN" | tee cutter_ldd_with_bundle_env.log || true
-
-          echo "---- not found only (cutter with bundle env) ----"
-          grep "not found" cutter_ldd_with_bundle_env.log || true
 
       - name: Upload artifact bundle dir
         uses: actions/upload-artifact@v6
