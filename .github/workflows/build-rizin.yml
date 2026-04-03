@@ -7,7 +7,16 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
       - name: Show runner info
         run: |
           uname -a
           lsb_release -a || cat /etc/os-release
+
+      - name: Show workspace
+        run: |
+          pwd
+          ls -la
+          find . -maxdepth 3 -type f | sort | sed -n '1,200p'
