@@ -16,7 +16,7 @@ jobs:
       QT_OUTPUT_DIR: ${{ github.workspace }}/qt
       QT_HOST: linux
       QT_TARGET: desktop
-      QT_ARCH: gcc_64
+      QT_ARCH: linux_gcc_64
 
     steps:
       - name: Checkout workflow repo
@@ -80,9 +80,14 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade aqtinstall
 
-      - name: Install Qt 6.9.3 with aqtinstall
+      - name: Check available Qt architectures
         run: |
           set -euxo pipefail
+          python3 -m aqt list-qt "$QT_HOST" "$QT_TARGET" --arch "$QT_VERSION" | tee "$GITHUB_WORKSPACE/aqt_arch_list.txt"
+
+      - name: Install Qt 6.9.3 with aqtinstall
+        run: |
+          set -o pipefail
           mkdir -p "$QT_OUTPUT_DIR"
           python3 -m aqt install-qt \
             -O "$QT_OUTPUT_DIR" \
@@ -91,7 +96,8 @@ jobs:
             "$QT_VERSION" \
             "$QT_ARCH" \
             -m qtshadertools \
-            --archives qtbase qtsvg
+            --archives qtbase qtsvg \
+            2>&1 | tee "$GITHUB_WORKSPACE/aqt_install.log"
 
       - name: Define Qt paths
         run: |
@@ -100,7 +106,7 @@ jobs:
           echo "QT_ROOT=$QT_ROOT" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> "$GITHUB_ENV"
           test -d "$QT_ROOT"
-          find "$QT_ROOT" -maxdepth 2 -type d | sort | sed -n '1,120p'
+          find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
 
       - name: Show tool versions
         run: |
@@ -252,12 +258,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-      - name: Upload build logs
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: vgmtrans_build_logs
+          name: vgmtrans_logs
           path: |
+            ${{ github.workspace }}/aqt_arch_list.txt
+            ${{ github.workspace }}/aqt_install.log
             ${{ github.workspace }}/build_full.log
             ${{ github.workspace }}/build_tail_200.txt
             ${{ github.workspace }}/build_tail_60.txt
