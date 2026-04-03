@@ -57,9 +57,9 @@ jobs:
           meson install -C build
 
           test -x out/bin/rizin
+          out/bin/rizin -v
           out/bin/rz-bin -v
           out/bin/rz-asm -v
-          out/bin/rz-diff -v
           out/bin/rz-ax -v
 
       - name: Inspect built Rizin prefix
