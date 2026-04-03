@@ -44,6 +44,8 @@ jobs:
             pkg-config \
             git \
             zip \
+            wget \
+            apt-transport-https \
             libsdl2-dev \
             libgtk-3-dev \
             libepoxy-dev \
@@ -60,6 +62,14 @@ jobs:
             libasound2-dev \
             libpulse-dev
 
+      - name: Install .NET SDK 8
+        run: |
+          wget https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          rm -f packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y dotnet-sdk-8.0
+
       - name: Show toolchain versions
         run: |
           cc --version | head -n 1
@@ -68,30 +78,38 @@ jobs:
           make --version | head -n 1
           pkg-config --version
           sdl2-config --version
+          dotnet --info | sed -n '1,40p'
+
+      - name: Inspect makefile
+        working-directory: mesen2-src
+        run: |
+          echo "==== makefile head ===="
+          sed -n '1,260p' makefile
 
       - name: Build Mesen2 native Linux first pass
         working-directory: mesen2-src
         run: |
           set -euo pipefail
-
           echo "==== pkg-config SDL2 ===="
           pkg-config --modversion sdl2 || true
           pkg-config --cflags sdl2 || true
           pkg-config --libs sdl2 || true
 
-          echo "==== root makefile head ===="
-          sed -n '1,160p' makefile || true
+          echo "==== dotnet sdk check ===="
+          dotnet --list-sdks
 
-          make -j"$(nproc)"
+          make ui
 
       - name: Locate built binary
         working-directory: mesen2-src
         run: |
           echo "==== executable files ===="
-          find . -maxdepth 6 -type f -executable | sort | sed -n '1,300p'
+          find . -maxdepth 8 -type f -executable | sort | sed -n '1,400p'
 
           BIN_CANDIDATE=""
           for p in \
+            ./UI/bin/Release/net8.0/linux-x64/publish/Mesen \
+            ./UI/bin/Release/net8.0/linux-x64/publish/Mesen2 \
             ./bin/Release/net8.0/linux-x64/publish/Mesen \
             ./bin/Release/net8.0/linux-x64/publish/Mesen2 \
             ./Linux/bin/Release/net8.0/linux-x64/publish/Mesen \
@@ -134,7 +152,6 @@ jobs:
           cp -a "$MESEN2_BIN" bundle/bin/mesen2
 
           BIN_DIR="$(dirname "$MESEN2_BIN")"
-
           if [ -d "$BIN_DIR" ]; then
             mkdir -p bundle/runtime
             cp -a "$BIN_DIR"/. bundle/runtime/ || true
