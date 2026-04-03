@@ -20,6 +20,16 @@ jobs:
         run: |
           git clone --recursive https://github.com/ares-emulator/ares.git ares-src
 
+      - name: Inspect source tree
+        working-directory: ares-src
+        run: |
+          echo "==== top level ===="
+          ls -la
+          echo "==== find makefiles ===="
+          find . -maxdepth 4 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort
+          echo "==== likely project dirs ===="
+          find . -maxdepth 3 -type d | sort | sed -n '1,200p'
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -50,7 +60,29 @@ jobs:
       - name: Build ares release gtk3
         working-directory: ares-src
         run: |
-          make clean || true
+          set -euo pipefail
+
+          BUILD_DIR=""
+          if [ -f desktop-ui/Makefile ]; then
+            BUILD_DIR="desktop-ui"
+          elif [ -f desktop-ui/GNUmakefile ]; then
+            BUILD_DIR="desktop-ui"
+          elif [ -f desktop-ui/makefile ]; then
+            BUILD_DIR="desktop-ui"
+          elif [ -f Makefile ]; then
+            BUILD_DIR="."
+          elif [ -f GNUmakefile ]; then
+            BUILD_DIR="."
+          elif [ -f makefile ]; then
+            BUILD_DIR="."
+          else
+            echo "No supported Makefile location found"
+            exit 1
+          fi
+
+          echo "Using build dir: $BUILD_DIR"
+          cd "$BUILD_DIR"
+
           make build=release hiro=gtk3 -j"$(nproc)"
 
       - name: Locate built binary
@@ -60,11 +92,11 @@ jobs:
           find . -type f | grep -Ei '(^|/)(ares)$' | sort || true
 
           echo "==== executable files near top ===="
-          find . -maxdepth 5 -type f -executable | sort | sed -n '1,240p'
+          find . -maxdepth 6 -type f -executable | sort | sed -n '1,240p'
 
           BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(ares)$' | head -n 1 || true)"
           if [ -z "$BIN_CANDIDATE" ]; then
-            BIN_CANDIDATE="$(find . -maxdepth 5 -type f -executable | head -n 1 || true)"
+            BIN_CANDIDATE="$(find . -maxdepth 6 -type f -executable | head -n 1 || true)"
           fi
           if [ -z "$BIN_CANDIDATE" ]; then
             echo "No executable found"
@@ -92,6 +124,11 @@ jobs:
           if [ -d ares/Shaders ]; then
             mkdir -p bundle/Shaders
             cp -a ares/Shaders/. bundle/Shaders/
+          fi
+
+          if [ -d desktop-ui/ares/Shaders ]; then
+            mkdir -p bundle/Shaders
+            cp -a desktop-ui/ares/Shaders/. bundle/Shaders/ || true
           fi
 
           if [ -f LICENSE ]; then
