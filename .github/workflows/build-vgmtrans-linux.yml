@@ -92,10 +92,20 @@ jobs:
       - name: Build
         working-directory: vgmtrans-src
         run: |
+          set -o pipefail
+          cmake --build --preset linux-x64-release -j"$(nproc)" --verbose 2>&1 | tee "$GITHUB_WORKSPACE/build_full.log"
+
+      - name: Extract build log tail
+        if: always()
+        run: |
           set -euxo pipefail
-          cmake --build --preset linux-x64-release -j"$(nproc)" --verbose
+          tail -n 200 "$GITHUB_WORKSPACE/build_full.log" > "$GITHUB_WORKSPACE/build_tail_200.txt" || true
+          tail -n 60 "$GITHUB_WORKSPACE/build_full.log" > "$GITHUB_WORKSPACE/build_tail_60.txt" || true
+          echo "== build tail 60 =="
+          sed -n '1,120p' "$GITHUB_WORKSPACE/build_tail_60.txt" || true
 
       - name: Install bundle
+        if: success()
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
@@ -103,6 +113,7 @@ jobs:
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out" || true
 
       - name: Locate built binaries
+        if: success()
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
@@ -110,6 +121,7 @@ jobs:
           find build/linux-x64 -type f \( -name 'vgmtrans' -o -name 'vgmtrans-cli' -o -name 'vgmtrans-shell' \) | sort || true
 
       - name: Stage binaries from build tree if missing
+        if: success()
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
@@ -136,6 +148,7 @@ jobs:
           fi
 
       - name: Inspect installed bundle
+        if: success()
         run: |
           set -euxo pipefail
           echo "== installed/staged files =="
@@ -145,6 +158,7 @@ jobs:
           file "$GITHUB_WORKSPACE"/out/bin/* || true
 
       - name: Show dynamic deps
+        if: success()
         run: |
           set -euxo pipefail
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans" ]; then
@@ -158,6 +172,7 @@ jobs:
           fi
 
       - name: Verify CLI
+        if: success()
         run: |
           set -euxo pipefail
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
@@ -165,6 +180,7 @@ jobs:
           fi
 
       - name: Verify shell presence
+        if: success()
         run: |
           set -euxo pipefail
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
@@ -172,11 +188,12 @@ jobs:
           fi
 
       - name: Smoke test GUI under Xvfb
+        if: success()
         run: |
           set -euxo pipefail
           test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans"
           set +e
-          timeout 10s xvfb-run -a "$GITHUB_WORKSPACE/out/bin/vgmtrans" >"$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
+          timeout 10s xvfb-run -a "$GITHUB_WORKSPACE/out/bin/vgmtrans" > "$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
           status=$?
           set -e
           cat "$RUNNER_TEMP/vgmtrans_gui.log" || true
@@ -185,14 +202,28 @@ jobs:
           fi
 
       - name: Package tarball
+        if: success()
         run: |
           set -euxo pipefail
           tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz .
 
-      - name: Upload artifact
+      - name: Upload GUI bundle artifact
+        if: success()
         uses: actions/upload-artifact@v6
         with:
           name: vgmtrans_linux_x86_64_gui_nondeploy_bundle
           path: vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: vgmtrans_build_logs
+          path: |
+            ${{ github.workspace }}/build_full.log
+            ${{ github.workspace }}/build_tail_200.txt
+            ${{ github.workspace }}/build_tail_60.txt
           if-no-files-found: error
           compression-level: 0
