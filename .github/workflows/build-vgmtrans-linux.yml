@@ -56,6 +56,7 @@ jobs:
             python3-pip \
             file \
             xvfb \
+            curl \
             libgl1-mesa-dev \
             libfontconfig1-dev \
             libfreetype-dev \
@@ -126,6 +127,32 @@ jobs:
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> "$GITHUB_ENV"
           echo "Resolved QT_ROOT=$QT_ROOT"
           find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
+
+      - name: Install ICU 73 compatibility runtime
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/icu73"
+          curl -L \
+            -o "$RUNNER_TEMP/libicu73.deb" \
+            "https://deb.debian.org/debian/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb"
+          dpkg-deb -x "$RUNNER_TEMP/libicu73.deb" "$GITHUB_WORKSPACE/icu73"
+          ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
+          test -f "$ICU73_LIBDIR/libicui18n.so.73"
+          test -f "$ICU73_LIBDIR/libicuuc.so.73"
+          test -f "$ICU73_LIBDIR/libicudata.so.73"
+          echo "ICU73_LIBDIR=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+          if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify qsb runtime
+        run: |
+          set -euxo pipefail
+          test -f "$QT_ROOT/bin/qsb"
+          ldd "$QT_ROOT/bin/qsb" || true
+          "$QT_ROOT/bin/qsb" --help >/dev/null || true
 
       - name: Show tool versions
         run: |
