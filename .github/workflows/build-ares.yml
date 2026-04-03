@@ -25,10 +25,10 @@ jobs:
         run: |
           echo "==== top level ===="
           ls -la
-          echo "==== find makefiles ===="
-          find . -maxdepth 4 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort
-          echo "==== likely project dirs ===="
-          find . -maxdepth 3 -type d | sort | sed -n '1,200p'
+          echo "==== desktop-ui ===="
+          ls -la desktop-ui || true
+          echo "==== makefiles ===="
+          find . -maxdepth 4 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort || true
 
       - name: Install build dependencies
         run: |
@@ -44,6 +44,9 @@ jobs:
             libgtk-3-dev \
             libgl1-mesa-dev \
             libasound2-dev \
+            libao-dev \
+            libopenal-dev \
+            libpulse-dev \
             libxrandr-dev \
             libxcursor-dev \
             libxi-dev \
@@ -61,29 +64,8 @@ jobs:
         working-directory: ares-src
         run: |
           set -euo pipefail
-
-          BUILD_DIR=""
-          if [ -f desktop-ui/Makefile ]; then
-            BUILD_DIR="desktop-ui"
-          elif [ -f desktop-ui/GNUmakefile ]; then
-            BUILD_DIR="desktop-ui"
-          elif [ -f desktop-ui/makefile ]; then
-            BUILD_DIR="desktop-ui"
-          elif [ -f Makefile ]; then
-            BUILD_DIR="."
-          elif [ -f GNUmakefile ]; then
-            BUILD_DIR="."
-          elif [ -f makefile ]; then
-            BUILD_DIR="."
-          else
-            echo "No supported Makefile location found"
-            exit 1
-          fi
-
-          echo "Using build dir: $BUILD_DIR"
-          cd "$BUILD_DIR"
-
-          make build=release hiro=gtk3 -j"$(nproc)"
+          test -d desktop-ui
+          make -C desktop-ui build=release hiro=gtk3 -j"$(nproc)"
 
       - name: Locate built binary
         working-directory: ares-src
@@ -94,7 +76,20 @@ jobs:
           echo "==== executable files near top ===="
           find . -maxdepth 6 -type f -executable | sort | sed -n '1,240p'
 
-          BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(ares)$' | head -n 1 || true)"
+          BIN_CANDIDATE=""
+          for p in \
+            ./desktop-ui/out/ares \
+            ./out/ares
+          do
+            if [ -x "$p" ]; then
+              BIN_CANDIDATE="$p"
+              break
+            fi
+          done
+
+          if [ -z "$BIN_CANDIDATE" ]; then
+            BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(ares)$' | head -n 1 || true)"
+          fi
           if [ -z "$BIN_CANDIDATE" ]; then
             BIN_CANDIDATE="$(find . -maxdepth 6 -type f -executable | head -n 1 || true)"
           fi
@@ -102,6 +97,7 @@ jobs:
             echo "No executable found"
             exit 1
           fi
+
           echo "ARES_BIN=$BIN_CANDIDATE" >> "$GITHUB_ENV"
           echo "Selected binary: $BIN_CANDIDATE"
 
