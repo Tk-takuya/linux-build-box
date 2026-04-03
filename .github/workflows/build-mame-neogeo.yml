@@ -1,0 +1,72 @@
+name: Build MAME NEOGEO Linux x86_64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-mame-neogeo:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install packages needed for build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            python3 \
+            libsdl2-dev \
+            libsdl2-ttf-dev \
+            libfontconfig-dev \
+            libpulse-dev \
+            qtbase5-dev \
+            qtbase5-dev-tools \
+            qtchooser \
+            qt5-qmake \
+            p7zip-full \
+            zip \
+            curl \
+            file
+
+      - name: Download official MAME source package
+        run: |
+          curl -L -o mame0287s.exe \
+            https://www.mamedev.org/releases/mame0287s.exe
+
+      - name: Extract source package
+        run: |
+          mkdir mame-src
+          7z x mame0287s.exe -omame-src
+
+      - name: Build NEOGEO subset
+        run: |
+          cd mame-src
+          make SUBTARGET=neogeomame SOURCES=src/mame/neogeo/neogeo.cpp REGENIE=1 -j3
+
+      - name: Locate built binary and collect runtime files
+        run: |
+          mkdir -p mame-out
+          BIN_PATH="$(find mame-src -type f \( -name neogeomame -o -name 'neogeomame*' -o -name mame \) | head -n 1)"
+          echo "BIN_PATH=$BIN_PATH"
+          test -n "$BIN_PATH"
+          cp "$BIN_PATH" mame-out/
+          cp -r mame-src/plugins mame-out/ || true
+          cp -r mame-src/hash mame-out/ || true
+
+      - name: Show verification info
+        run: |
+          file mame-out/* || true
+          ./mame-out/neogeomame -version || ./mame-out/mame -version || true
+
+      - name: Pack artifact
+        run: |
+          cd mame-out
+          zip -r ../mame_neogeo_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: mame_neogeo_linux_x86_64_bundle
+          path: mame_neogeo_linux_x86_64_bundle.zip
