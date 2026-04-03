@@ -25,10 +25,11 @@ jobs:
         run: |
           echo "==== top level ===="
           ls -la
-          echo "==== desktop-ui ===="
+          echo "==== key paths ===="
           ls -la desktop-ui || true
+          ls -la ares || true
           echo "==== makefiles ===="
-          find . -maxdepth 4 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort || true
+          find . -maxdepth 3 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort || true
 
       - name: Install build dependencies
         run: |
@@ -42,6 +43,7 @@ jobs:
             git \
             zip \
             libgtk-3-dev \
+            libcanberra-gtk-module \
             libgl1-mesa-dev \
             libasound2-dev \
             libao-dev \
@@ -64,8 +66,7 @@ jobs:
         working-directory: ares-src
         run: |
           set -euo pipefail
-          test -d desktop-ui
-          make -C desktop-ui build=release hiro=gtk3 -j"$(nproc)"
+          make build=release hiro=gtk3 -j"$(nproc)"
 
       - name: Locate built binary
         working-directory: ares-src
@@ -79,7 +80,9 @@ jobs:
           BIN_CANDIDATE=""
           for p in \
             ./desktop-ui/out/ares \
-            ./out/ares
+            ./out/ares \
+            ./ares \
+            ./build/ares
           do
             if [ -x "$p" ]; then
               BIN_CANDIDATE="$p"
@@ -120,11 +123,6 @@ jobs:
           if [ -d ares/Shaders ]; then
             mkdir -p bundle/Shaders
             cp -a ares/Shaders/. bundle/Shaders/
-          fi
-
-          if [ -d desktop-ui/ares/Shaders ]; then
-            mkdir -p bundle/Shaders
-            cp -a desktop-ui/ares/Shaders/. bundle/Shaders/ || true
           fi
 
           if [ -f LICENSE ]; then
