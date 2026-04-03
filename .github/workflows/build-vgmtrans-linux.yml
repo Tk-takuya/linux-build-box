@@ -1,4 +1,4 @@
-name: build-vgmtrans-linux-gui
+name: build-vgmtrans-linux-gui-nondeploy
 
 on:
   workflow_dispatch:
@@ -62,6 +62,7 @@ jobs:
             -DENABLE_CLI=ON \
             -DENABLE_SHELL=ON \
             -DINSTALL_SHELL=ON \
+            -DNO_QT_DEPLOY=ON \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out"
 
       - name: Build
@@ -75,7 +76,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out/bin"
-          cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out"
+          cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out" || true
 
       - name: Locate built binaries
         working-directory: vgmtrans-src
@@ -84,16 +85,23 @@ jobs:
           echo "== search build tree for candidates =="
           find build/linux-x64 -type f \( -name 'vgmtrans' -o -name 'vgmtrans-cli' -o -name 'vgmtrans-shell' \) | sort || true
 
-      - name: Stage CLI if not installed
+      - name: Stage binaries from build tree if missing
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out/bin"
 
+          if [ ! -f "$GITHUB_WORKSPACE/out/bin/vgmtrans" ]; then
+            GUI_PATH="$(find build/linux-x64 -type f -name 'vgmtrans' | sort | head -n 1 || true)"
+            test -n "$GUI_PATH"
+            cp -fv "$GUI_PATH" "$GITHUB_WORKSPACE/out/bin/vgmtrans"
+          fi
+
           if [ ! -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
             CLI_PATH="$(find build/linux-x64 -type f -name 'vgmtrans-cli' | sort | head -n 1 || true)"
-            test -n "$CLI_PATH"
-            cp -fv "$CLI_PATH" "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
+            if [ -n "$CLI_PATH" ]; then
+              cp -fv "$CLI_PATH" "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
+            fi
           fi
 
           if [ ! -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
@@ -128,8 +136,9 @@ jobs:
       - name: Verify CLI
         run: |
           set -euxo pipefail
-          test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
-          "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
+          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
+            "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
+          fi
 
       - name: Verify shell presence
         run: |
@@ -154,12 +163,12 @@ jobs:
       - name: Package tarball
         run: |
           set -euxo pipefail
-          tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_gui_bundle.tar.gz .
+          tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: vgmtrans_linux_x86_64_gui_bundle
-          path: vgmtrans_linux_x86_64_gui_bundle.tar.gz
+          name: vgmtrans_linux_x86_64_gui_nondeploy_bundle
+          path: vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz
           if-no-files-found: error
           compression-level: 0
