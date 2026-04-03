@@ -72,15 +72,17 @@ jobs:
         run: |
           echo "Using: $FBNEO_BIN"
           file "$FBNEO_BIN"
-          ldd "$FBNEO_BIN" | tee fbneo_ldd.log || true
-          echo "---- not found only ----"
-          grep "not found" fbneo_ldd.log || true
+          ldd "$FBNEO_BIN" | tee fbneo_ldd_raw.log || true
+          echo "---- not found only (raw) ----"
+          grep "not found" fbneo_ldd_raw.log || true
 
       - name: Prepare portable bundle
         working-directory: fbneo-src
         run: |
           rm -rf bundle
           mkdir -p bundle/bin
+          mkdir -p bundle/lib
+
           cp -a "$FBNEO_BIN" bundle/bin/
 
           if [ -d support ]; then
@@ -98,16 +100,41 @@ jobs:
             cp -a previews/. bundle/previews/
           fi
 
+          for lib in \
+            /lib/x86_64-linux-gnu/libSDL2_image-2.0.so.0 \
+            /lib/x86_64-linux-gnu/libSDL2_image-2.0.so.0.* \
+            /usr/lib/x86_64-linux-gnu/libSDL2_image-2.0.so.0 \
+            /usr/lib/x86_64-linux-gnu/libSDL2_image-2.0.so.0.*
+          do
+            if compgen -G "$lib" > /dev/null; then
+              cp -a $lib bundle/lib/ || true
+            fi
+          done
+
+          echo "==== bundled libs ===="
+          find bundle/lib -maxdepth 2 -type f | sort | sed -n '1,120p' || true
+
+          echo "==== bundle tree ===="
           find bundle -maxdepth 5 -type f | sort | sed -n '1,300p'
+
+      - name: Inspect binary with bundle lib path
+        working-directory: fbneo-src
+        run: |
+          export LD_LIBRARY_PATH="$PWD/bundle/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          ldd "bundle/bin/$(basename "$FBNEO_BIN")" | tee fbneo_ldd_with_bundle_env.log || true
+          echo "---- not found only (with bundle env) ----"
+          grep "not found" fbneo_ldd_with_bundle_env.log || true
 
       - name: Prepare wrapper
         working-directory: fbneo-src
         run: |
-          cat > bundle/run-fbneo.sh << 'EOF'
+          BIN_NAME="$(basename "$FBNEO_BIN")"
+          cat > bundle/run-fbneo.sh << EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          HERE="$(cd "$(dirname "$0")" && pwd)"
-          exec "$HERE/bin/$(basename "$FBNEO_BIN")" "$@"
+          HERE="\$(cd "\$(dirname "\$0")" && pwd)"
+          export LD_LIBRARY_PATH="\$HERE/lib\${LD_LIBRARY_PATH+:\$LD_LIBRARY_PATH}"
+          exec "\$HERE/bin/$BIN_NAME" "\$@"
           EOF
           chmod +x bundle/run-fbneo.sh
 
