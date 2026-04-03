@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install packages needed for build
         run: |
@@ -63,7 +63,7 @@ jobs:
           zip -r ../radare2_linux_x86_64_bundle.zip .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: radare2_linux_x86_64_bundle
           path: radare2_linux_x86_64_bundle.zip
