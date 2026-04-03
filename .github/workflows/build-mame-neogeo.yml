@@ -33,7 +33,7 @@ jobs:
       - name: Download official MAME source package
         run: |
           curl -L -o mame0287s.exe \
-            https://www.mamedev.org/releases/mame0287s.exe
+           https://github.com/mamedev/mame/releases/download/mame0287/mame0287s.exe
 
       - name: Extract source package
         run: |
