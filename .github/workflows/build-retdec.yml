@@ -1,0 +1,180 @@
+name: build-retdec
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+
+      - name: Clone RetDec source
+        run: |
+          git clone --recursive https://github.com/avast/retdec.git retdec-src
+
+      - name: Inspect source tree
+        working-directory: retdec-src
+        run: |
+          echo "==== top level ===="
+          ls -la
+          echo "==== key files ===="
+          ls -la CMakeLists.txt README.md retdec-config.cmake || true
+          echo "==== top directories ===="
+          find . -maxdepth 2 -type d | sort | sed -n '1,200p'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            openssl \
+            libssl-dev \
+            python3 \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            m4 \
+            zlib1g-dev \
+            zip \
+            doxygen \
+            graphviz
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          c++ --version | head -n 1
+          cmake --version | head -n 1
+          python3 --version
+          pkg-config --version
+          openssl version
+
+      - name: Configure RetDec
+        working-directory: retdec-src
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/../retdec-install"
+
+      - name: Build RetDec
+        working-directory: retdec-src
+        run: |
+          cd build
+          make -j"$(nproc)"
+
+      - name: Install RetDec
+        working-directory: retdec-src
+        run: |
+          cd build
+          make install
+
+      - name: Inspect installed tree
+        working-directory: retdec-src
+        run: |
+          echo "==== install tree ===="
+          find retdec-install -maxdepth 4 -type f | sort | sed -n '1,400p'
+
+      - name: Locate likely executables
+        working-directory: retdec-src
+        run: |
+          echo "==== executables in install tree ===="
+          find retdec-install -type f -executable | sort | sed -n '1,300p'
+
+          RETDEC_DECOMPILER=""
+          for p in \
+            ./retdec-install/bin/retdec-decompiler.py \
+            ./retdec-install/bin/retdec-decompiler
+          do
+            if [ -e "$p" ]; then
+              RETDEC_DECOMPILER="$p"
+              break
+            fi
+          done
+
+          if [ -z "$RETDEC_DECOMPILER" ]; then
+            RETDEC_DECOMPILER="$(find retdec-install -type f | grep -E 'retdec-decompiler(\.py)?$' | head -n 1 || true)"
+          fi
+
+          if [ -z "$RETDEC_DECOMPILER" ]; then
+            echo "retdec-decompiler not found"
+            exit 1
+          fi
+
+          echo "RETDEC_MAIN=$RETDEC_DECOMPILER" >> "$GITHUB_ENV"
+          echo "Selected main entry: $RETDEC_DECOMPILER"
+
+      - name: Inspect main entry
+        working-directory: retdec-src
+        run: |
+          echo "Using: $RETDEC_MAIN"
+          file "$RETDEC_MAIN" || true
+          if [ -x "$RETDEC_MAIN" ]; then
+            ldd "$RETDEC_MAIN" | tee retdec_ldd_raw.log || true
+            echo "---- not found only (raw) ----"
+            grep "not found" retdec_ldd_raw.log || true
+          else
+            echo "Main entry is probably a Python/script wrapper, skipping ldd"
+          fi
+
+      - name: Prepare portable bundle
+        working-directory: retdec-src
+        run: |
+          rm -rf bundle
+          mkdir -p bundle
+          cp -a retdec-install/. bundle/
+
+          cat > bundle/run-retdec.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          if [ -x "$HERE/bin/retdec-decompiler.py" ]; then
+            exec "$HERE/bin/retdec-decompiler.py" "$@"
+          elif [ -x "$HERE/bin/retdec-decompiler" ]; then
+            exec "$HERE/bin/retdec-decompiler" "$@"
+          else
+            echo "retdec-decompiler entry not found"
+            exit 1
+          fi
+          EOF
+          chmod +x bundle/run-retdec.sh
+
+          echo "==== bundle tree ===="
+          find bundle -maxdepth 5 -type f | sort | sed -n '1,400p'
+
+      - name: Smoke test help/version
+        working-directory: retdec-src
+        run: |
+          bundle/run-retdec.sh --help | sed -n '1,60p' || true
+
+      - name: Upload artifact bundle dir
+        uses: actions/upload-artifact@v6
+        with:
+          name: retdec_linux_x86_64_bundle_dir
+          path: retdec-src/bundle
+          if-no-files-found: error
+
+      - name: Pack bundle zip
+        working-directory: retdec-src
+        run: |
+          cd bundle
+          zip -r ../retdec_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: retdec_linux_x86_64_bundle_zip
+          path: retdec-src/retdec_linux_x86_64_bundle.zip
+          if-no-files-found: error
