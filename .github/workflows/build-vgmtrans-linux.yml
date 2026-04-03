@@ -123,25 +123,57 @@ jobs:
         run: |
           set -o pipefail
           echo "Install ICU 73 compatibility runtime: start" >> "$GITHUB_WORKSPACE/step_status.log"
-          mkdir -p "$GITHUB_WORKSPACE/icu73"
-          ICU_URL="https://snapshot.debian.org/archive/debian/20230328T180011Z/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb"
-          echo "Downloading: $ICU_URL" | tee "$GITHUB_WORKSPACE/icu73_install.log"
-          curl -fL \
-            -o "$RUNNER_TEMP/libicu73.deb" \
-            "$ICU_URL" \
-            2>&1 | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
-          file "$RUNNER_TEMP/libicu73.deb" | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
-          dpkg-deb -x "$RUNNER_TEMP/libicu73.deb" "$GITHUB_WORKSPACE/icu73" 2>&1 | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
-          ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
-          test -f "$ICU73_LIBDIR/libicui18n.so.73"
-          test -f "$ICU73_LIBDIR/libicuuc.so.73"
-          test -f "$ICU73_LIBDIR/libicudata.so.73"
-          echo "ICU73_LIBDIR=$ICU73_LIBDIR" >> "$GITHUB_ENV"
-          if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          else
-            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
-          fi
+
+          WORKROOT="$RUNNER_TEMP/icu73-apt"
+          mkdir -p "$WORKROOT/state/lists/partial" "$WORKROOT/cache/archives/partial"
+
+          cat > "$WORKROOT/snapshot.list" <<'EOF'
+          deb [trusted=yes check-valid-until=no] https://snapshot.debian.org/archive/debian/20230329T000000Z/ experimental main
+          EOF
+
+          {
+            echo "=== snapshot sources ==="
+            cat "$WORKROOT/snapshot.list"
+            echo "=== apt update ==="
+            apt-get \
+              -o Dir::State="$WORKROOT/state" \
+              -o Dir::Cache="$WORKROOT/cache" \
+              -o Dir::Etc::sourcelist="$WORKROOT/snapshot.list" \
+              -o Dir::Etc::sourceparts="-" \
+              update
+
+            echo "=== apt download libicu73 ==="
+            cd "$WORKROOT"
+            apt-get \
+              -o Dir::State="$WORKROOT/state" \
+              -o Dir::Cache="$WORKROOT/cache" \
+              -o Dir::Etc::sourcelist="$WORKROOT/snapshot.list" \
+              -o Dir::Etc::sourceparts="-" \
+              download libicu73=73.1~rc-1
+
+            echo "=== downloaded files ==="
+            ls -l "$WORKROOT"
+
+            DEB_PATH="$(find "$WORKROOT" -maxdepth 1 -type f -name 'libicu73_73.1~rc-1_*.deb' | head -n 1)"
+            test -n "$DEB_PATH"
+            file "$DEB_PATH"
+
+            mkdir -p "$GITHUB_WORKSPACE/icu73"
+            dpkg-deb -x "$DEB_PATH" "$GITHUB_WORKSPACE/icu73"
+
+            ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
+            test -f "$ICU73_LIBDIR/libicui18n.so.73"
+            test -f "$ICU73_LIBDIR/libicuuc.so.73"
+            test -f "$ICU73_LIBDIR/libicudata.so.73"
+
+            echo "ICU73_LIBDIR=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+            if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+              echo "LD_LIBRARY_PATH=$ICU73_LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+            else
+              echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+            fi
+          } 2>&1 | tee "$GITHUB_WORKSPACE/icu73_install.log"
+
           echo "Install ICU 73 compatibility runtime: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Install Qt with aqtinstall
@@ -234,7 +266,6 @@ jobs:
           set -euxo pipefail
           tail -n 200 "$GITHUB_WORKSPACE/build_full.log" > "$GITHUB_WORKSPACE/build_tail_200.txt" || true
           tail -n 60 "$GITHUB_WORKSPACE/build_full.log" > "$GITHUB_WORKSPACE/build_tail_60.txt" || true
-          echo "== build tail 60 =="
           sed -n '1,120p' "$GITHUB_WORKSPACE/build_tail_60.txt" || true
 
       - name: Install bundle
@@ -251,7 +282,6 @@ jobs:
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
-          echo "== search build tree for candidates =="
           find build/linux-x64 -type f \( -name 'vgmtrans' -o -name 'vgmtrans-cli' -o -name 'vgmtrans-shell' \) | sort || true
 
       - name: Stage binaries from build tree if missing
@@ -285,10 +315,7 @@ jobs:
         if: success()
         run: |
           set -euxo pipefail
-          echo "== installed/staged files =="
           find "$GITHUB_WORKSPACE/out" -maxdepth 6 -type f | sort
-          echo
-          echo "== file types =="
           file "$GITHUB_WORKSPACE"/out/bin/* || true
 
       - name: Show dynamic deps
