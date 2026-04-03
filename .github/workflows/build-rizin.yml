@@ -54,3 +54,14 @@ jobs:
           test -d build
           test -f build/build.ninja
           ls -la build | sed -n '1,120p'
+
+      - name: Build Rizin
+        working-directory: rizin-src
+        run: |
+          ninja -C build
+
+      - name: Show built binaries
+        working-directory: rizin-src
+        run: |
+          find build -type f \( -name rizin -o -name rz-bin -o -name rz-asm -o -name rz-diff -o -name rz-ax \) | sort || true
+          find build -type f | sed -n '1,200p'
