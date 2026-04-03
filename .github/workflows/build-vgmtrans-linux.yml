@@ -25,7 +25,11 @@ jobs:
         run: |
           set -euxo pipefail
           : > "$GITHUB_WORKSPACE/aqt_arch_list.txt"
+          : > "$GITHUB_WORKSPACE/icu73_install.log"
           : > "$GITHUB_WORKSPACE/aqt_install.log"
+          : > "$GITHUB_WORKSPACE/qt_path.log"
+          : > "$GITHUB_WORKSPACE/qsb_verify.log"
+          : > "$GITHUB_WORKSPACE/configure.log"
           : > "$GITHUB_WORKSPACE/build_full.log"
           : > "$GITHUB_WORKSPACE/build_tail_200.txt"
           : > "$GITHUB_WORKSPACE/build_tail_60.txt"
@@ -102,10 +106,31 @@ jobs:
           echo "AQT_ARCH=$AQT_ARCH" >> "$GITHUB_ENV"
           echo "Selected AQT_ARCH=$AQT_ARCH"
 
+      - name: Install ICU 73 compatibility runtime
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/icu73"
+          curl -L \
+            -o "$RUNNER_TEMP/libicu73.deb" \
+            "https://deb.debian.org/debian/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb" \
+            2>&1 | tee "$GITHUB_WORKSPACE/icu73_install.log"
+          dpkg-deb -x "$RUNNER_TEMP/libicu73.deb" "$GITHUB_WORKSPACE/icu73" 2>&1 | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
+          ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
+          test -f "$ICU73_LIBDIR/libicui18n.so.73"
+          test -f "$ICU73_LIBDIR/libicuuc.so.73"
+          test -f "$ICU73_LIBDIR/libicudata.so.73"
+          echo "ICU73_LIBDIR=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+          if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
+          fi
+
       - name: Install Qt with aqtinstall
         run: |
           set -o pipefail
           mkdir -p "$QT_OUTPUT_DIR"
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           python3 -m aqt install-qt \
             -O "$QT_OUTPUT_DIR" \
             "$QT_HOST" \
@@ -118,41 +143,28 @@ jobs:
 
       - name: Define Qt paths
         run: |
-          set -euxo pipefail
+          set -o pipefail
           QT_ROOT="$(find "$QT_OUTPUT_DIR/$QT_VERSION" -mindepth 1 -maxdepth 4 -type d -path '*/lib/cmake/Qt6' | sed 's#/lib/cmake/Qt6##' | sort | head -n 1)"
           test -n "$QT_ROOT"
           test -d "$QT_ROOT"
           test -d "$QT_ROOT/lib/cmake/Qt6"
           echo "QT_ROOT=$QT_ROOT" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> "$GITHUB_ENV"
-          echo "Resolved QT_ROOT=$QT_ROOT"
-          find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
-
-      - name: Install ICU 73 compatibility runtime
-        run: |
-          set -euxo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/icu73"
-          curl -L \
-            -o "$RUNNER_TEMP/libicu73.deb" \
-            "https://deb.debian.org/debian/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb"
-          dpkg-deb -x "$RUNNER_TEMP/libicu73.deb" "$GITHUB_WORKSPACE/icu73"
-          ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
-          test -f "$ICU73_LIBDIR/libicui18n.so.73"
-          test -f "$ICU73_LIBDIR/libicuuc.so.73"
-          test -f "$ICU73_LIBDIR/libicudata.so.73"
-          echo "ICU73_LIBDIR=$ICU73_LIBDIR" >> "$GITHUB_ENV"
-          if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          else
-            echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
-          fi
+          {
+            echo "Resolved QT_ROOT=$QT_ROOT"
+            find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
+          } 2>&1 | tee "$GITHUB_WORKSPACE/qt_path.log"
 
       - name: Verify qsb runtime
         run: |
-          set -euxo pipefail
-          test -f "$QT_ROOT/bin/qsb"
-          ldd "$QT_ROOT/bin/qsb" || true
-          "$QT_ROOT/bin/qsb" --help >/dev/null || true
+          set -o pipefail
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          {
+            test -f "$QT_ROOT/bin/qsb"
+            ldd "$QT_ROOT/bin/qsb" || true
+            "$QT_ROOT/bin/qsb" --help >/dev/null
+            echo "qsb runtime OK"
+          } 2>&1 | tee "$GITHUB_WORKSPACE/qsb_verify.log"
 
       - name: Show tool versions
         run: |
@@ -166,7 +178,8 @@ jobs:
       - name: Configure
         working-directory: vgmtrans-src
         run: |
-          set -euxo pipefail
+          set -o pipefail
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           test -f CMakePresets.json
           cmake --preset linux-x64 \
             -DENABLE_UI_QT=ON \
@@ -175,12 +188,14 @@ jobs:
             -DINSTALL_SHELL=ON \
             -DNO_QT_DEPLOY=ON \
             -DCMAKE_PREFIX_PATH="$QT_ROOT" \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out"
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out" \
+            2>&1 | tee "$GITHUB_WORKSPACE/configure.log"
 
       - name: Build
         working-directory: vgmtrans-src
         run: |
           set -o pipefail
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           cmake --build --preset linux-x64-release -j"$(nproc)" --verbose 2>&1 | tee "$GITHUB_WORKSPACE/build_full.log"
 
       - name: Extract build log tail
@@ -197,6 +212,7 @@ jobs:
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           mkdir -p "$GITHUB_WORKSPACE/out/bin"
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out" || true
 
@@ -311,7 +327,11 @@ jobs:
           name: vgmtrans_logs
           path: |
             ${{ github.workspace }}/aqt_arch_list.txt
+            ${{ github.workspace }}/icu73_install.log
             ${{ github.workspace }}/aqt_install.log
+            ${{ github.workspace }}/qt_path.log
+            ${{ github.workspace }}/qsb_verify.log
+            ${{ github.workspace }}/configure.log
             ${{ github.workspace }}/build_full.log
             ${{ github.workspace }}/build_tail_200.txt
             ${{ github.workspace }}/build_tail_60.txt
