@@ -1,0 +1,372 @@
+name: build-mgba-som-bundles-appimage-node24
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-linux-bundles:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      MGBA_STABLE_URL: https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-appimage-x64.appimage
+      MGBA_DEV_URL: https://s3.amazonaws.com/mgba/mGBA-build-latest-appimage-x64.appimage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file unzip zip jq
+
+      - name: Write SOM helper files
+        run: |
+          mkdir -p scripts docs
+          cat > scripts/find_mgba_exe.py <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+          import os
+          import sys
+          from pathlib import Path
+
+          EXACT = {
+              'mgba', 'mgba-headless', 'mgba-qt', 'mgba-sdl',
+              'mgba.appimage', 'mgba-headless.appimage', 'mgba-qt.appimage',
+              'mgba.exe', 'mgba-headless.exe', 'mgba-qt.exe',
+              'mGBA'.casefold(), 'mGBA-qt'.casefold(), 'mGBA-headless'.casefold(),
+              'apprun'
+          }
+
+          def is_exec(path: Path) -> bool:
+              return path.is_file() and os.access(path, os.X_OK)
+
+          def score(path: Path) -> tuple[int, str]:
+              name = path.name.casefold()
+              if name in EXACT:
+                  return (0, str(path))
+              if 'mgba' in name:
+                  return (1, str(path))
+              return (2, str(path))
+
+          def main() -> int:
+              if len(sys.argv) != 2:
+                  print('usage: find_mgba_exe.py <root>', file=sys.stderr)
+                  return 2
+              root = Path(sys.argv[1])
+              candidates: list[Path] = []
+              for path in root.rglob('*'):
+                  if is_exec(path):
+                      lowered = path.name.casefold()
+                      if lowered in EXACT or 'mgba' in lowered or lowered == 'apprun':
+                          candidates.append(path)
+              if not candidates:
+                  print(f'no mGBA executable found under {root}', file=sys.stderr)
+                  return 1
+              candidates.sort(key=score)
+              print(candidates[0])
+              return 0
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+          PY
+          chmod +x scripts/find_mgba_exe.py
+
+          cat > scripts/run-mgba.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE=$(cd -- "$(dirname -- "$0")" && pwd)
+          ROOT=$(cd -- "$HERE/.." && pwd)
+          PAYLOAD_DIR=${MGBA_PAYLOAD_DIR:-"$ROOT/payload/stable"}
+          EXE=$(python3 "$HERE/find_mgba_exe.py" "$PAYLOAD_DIR")
+          exec "$EXE" "$@"
+          SH
+          chmod +x scripts/run-mgba.sh
+
+          cat > scripts/som_mgba_receiver.py <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+          import argparse
+          import datetime as dt
+          import socket
+          from pathlib import Path
+
+          def timestamp() -> str:
+              return dt.datetime.now(dt.timezone.utc).isoformat()
+
+          def main() -> int:
+              parser = argparse.ArgumentParser(description='Receive newline-delimited logs from mGBA Lua scripts.')
+              parser.add_argument('--host', default='127.0.0.1')
+              parser.add_argument('--port', type=int, default=61337)
+              parser.add_argument('--out', default='mgba_stream.log')
+              args = parser.parse_args()
+              out_path = Path(args.out)
+              out_path.parent.mkdir(parents=True, exist_ok=True)
+              with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+                  server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                  server.bind((args.host, args.port))
+                  server.listen(1)
+                  print(f'[{timestamp()}] listening on {args.host}:{args.port}')
+                  conn, addr = server.accept()
+                  print(f'[{timestamp()}] accepted connection from {addr[0]}:{addr[1]}')
+                  with conn, out_path.open('a', encoding='utf-8') as fh:
+                      fh.write(f'# session_start\t{timestamp()}\tpeer={addr[0]}:{addr[1]}\n')
+                      buf = b''
+                      while True:
+                          chunk = conn.recv(4096)
+                          if not chunk:
+                              break
+                          buf += chunk
+                          while b'\n' in buf:
+                              line, buf = buf.split(b'\n', 1)
+                              text = line.decode('utf-8', errors='replace')
+                              fh.write(text + '\n')
+                              fh.flush()
+                              print(text)
+                      if buf:
+                          text = buf.decode('utf-8', errors='replace')
+                          fh.write(text + '\n')
+                          fh.flush()
+                          print(text)
+                      fh.write(f'# session_end\t{timestamp()}\n')
+              return 0
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+          PY
+          chmod +x scripts/som_mgba_receiver.py
+
+          cat > scripts/som_mgba_frame_logger_stable.lua <<'LUA'
+          local HOST = "127.0.0.1"
+          local PORT = 61337
+          local FRAME_STRIDE = 1
+          local WATCH_VALUES = {
+            -- { label = "song_id", addr = 0x02000000, size = 2 },
+            -- { label = "engine_state", addr = 0x03000000, size = 4 },
+          }
+          local sock = nil
+          local frame_count = 0
+          local function mcall(obj, method, ...)
+            local f = obj[method]
+            if type(f) ~= "function" then error("missing method: " .. tostring(method)) end
+            return f(obj, ...)
+          end
+          local function send_line(line)
+            if not sock then return end
+            local ok = pcall(function() mcall(sock, "send", line .. "\n") end)
+            if not ok then sock = nil end
+          end
+          local function connect_socket()
+            local s = socket.connect(HOST, PORT)
+            if s then sock = s end
+          end
+          local function safe_reg(name)
+            local ok, value = pcall(function() return mcall(emu, "readRegister", name) end)
+            return ok and tostring(value) or "ERR"
+          end
+          local function safe_mem(addr, size)
+            local ok, value
+            if size == 1 then
+              ok, value = pcall(function() return mcall(emu, "read8", addr) end)
+            elseif size == 2 then
+              ok, value = pcall(function() return mcall(emu, "read16", addr) end)
+            elseif size == 4 then
+              ok, value = pcall(function() return mcall(emu, "read32", addr) end)
+            else
+              ok, value = pcall(function() return mcall(emu, "readRange", addr, size) end)
+            end
+            return ok and tostring(value) or "ERR"
+          end
+          mcall(callbacks, "add", "start", function()
+            connect_socket()
+            send_line("START\tmode=stable_frame")
+          end)
+          mcall(callbacks, "add", "frame", function()
+            frame_count = frame_count + 1
+            if FRAME_STRIDE > 1 and (frame_count % FRAME_STRIDE) ~= 0 then return end
+            local parts = {
+              "FRAME",
+              "n=" .. tostring(frame_count),
+              "pc=" .. safe_reg("pc"),
+              "sp=" .. safe_reg("sp"),
+              "lr=" .. safe_reg("lr"),
+              "cpsr=" .. safe_reg("cpsr"),
+            }
+            for _, item in ipairs(WATCH_VALUES) do
+              parts[#parts + 1] = item.label .. "=" .. safe_mem(item.addr, item.size)
+            end
+            send_line(table.concat(parts, "\t"))
+          end)
+          mcall(callbacks, "add", "stop", function()
+            send_line("STOP\tmode=stable_frame\tframes=" .. tostring(frame_count))
+          end)
+          LUA
+
+          cat > scripts/som_mgba_watch_logger_dev.lua <<'LUA'
+          local HOST = "127.0.0.1"
+          local PORT = 61337
+          local WATCH_RANGES = {
+            -- { label = "rom_seq_window", start_addr = 0x08000000, end_addr = 0x08010000, watch_type = "READ" },
+            -- { label = "mmio_sound", start_addr = 0x04000060, end_addr = 0x040000A8, watch_type = "WRITE" },
+          }
+          local sock = nil
+          local function mcall(obj, method, ...)
+            local f = obj[method]
+            if type(f) ~= "function" then error("missing method: " .. tostring(method)) end
+            return f(obj, ...)
+          end
+          local function send_line(line)
+            if not sock then return end
+            local ok = pcall(function() mcall(sock, "send", line .. "\n") end)
+            if not ok then sock = nil end
+          end
+          local function connect_socket()
+            local s = socket.connect(HOST, PORT)
+            if s then sock = s end
+          end
+          local function safe_reg(name)
+            local ok, value = pcall(function() return mcall(emu, "readRegister", name) end)
+            return ok and tostring(value) or "ERR"
+          end
+          local function watch_type_value(name)
+            local tbl = C.WATCHPOINT_TYPE or {}
+            return tbl[name] or tbl.RW or 3
+          end
+          local function make_watch_callback(spec)
+            return function(...)
+              local parts = {
+                "WATCH",
+                "label=" .. tostring(spec.label),
+                "start=" .. string.format("0x%08X", spec.start_addr),
+                "end=" .. string.format("0x%08X", spec.end_addr),
+                "type=" .. tostring(spec.watch_type),
+                "cycle=" .. tostring(mcall(emu, "currentCycle")),
+                "pc=" .. safe_reg("pc"),
+                "sp=" .. safe_reg("sp"),
+                "lr=" .. safe_reg("lr"),
+                "cpsr=" .. safe_reg("cpsr"),
+              }
+              send_line(table.concat(parts, "\t"))
+            end
+          end
+          mcall(callbacks, "add", "start", function()
+            connect_socket()
+            send_line("START\tmode=dev_watch")
+            if type(emu.setRangeWatchpoint) ~= "function" then
+              send_line("ERROR\tsetRangeWatchpoint unavailable")
+              return
+            end
+            for _, spec in ipairs(WATCH_RANGES) do
+              local id = mcall(
+                emu,
+                "setRangeWatchpoint",
+                make_watch_callback(spec),
+                spec.start_addr,
+                spec.end_addr,
+                watch_type_value(spec.watch_type),
+                -1
+              )
+              send_line("WATCH_INSTALL\tlabel=" .. tostring(spec.label) .. "\tid=" .. tostring(id))
+            end
+          end)
+          mcall(callbacks, "add", "stop", function()
+            send_line("STOP\tmode=dev_watch")
+          end)
+          LUA
+
+          cat > docs/README.md <<'MD'
+          # SOM mGBA build pack (AppImage, Node 24)
+          This workflow downloads the official stable Linux AppImage and the official development Linux AppImage for mGBA, copies the SOM helper scripts, runs a light smoke test, and uploads `som_mgba_binaries_and_tools_linux_appimage.zip` as the artifact.
+          MD
+
+      - name: Prepare directories
+        run: |
+          mkdir -p artifacts/bundle/scripts artifacts/bundle/docs artifacts/bundle/payload/stable artifacts/bundle/payload/dev
+
+      - name: Download stable AppImage
+        run: |
+          curl -L --fail --retry 3 "$MGBA_STABLE_URL" -o artifacts/bundle/payload/stable/mGBA-stable-x64.AppImage
+          chmod +x artifacts/bundle/payload/stable/mGBA-stable-x64.AppImage
+
+      - name: Download development AppImage
+        run: |
+          curl -L --fail --retry 3 "$MGBA_DEV_URL" -o artifacts/bundle/payload/dev/mGBA-dev-x64.AppImage
+          chmod +x artifacts/bundle/payload/dev/mGBA-dev-x64.AppImage
+
+      - name: Copy helper files into bundle
+        run: |
+          cp -a scripts/. artifacts/bundle/scripts/
+          cp -a docs/. artifacts/bundle/docs/
+
+      - name: Inspect payload files
+        run: |
+          echo '# stable'
+          find artifacts/bundle/payload/stable -maxdepth 3 -printf '%M %p\n' | sort
+          echo
+          echo '# dev'
+          find artifacts/bundle/payload/dev -maxdepth 3 -printf '%M %p\n' | sort
+
+      - name: Smoke test stable AppImage
+        run: |
+          python3 scripts/find_mgba_exe.py artifacts/bundle/payload/stable > stable_exe.txt
+          STABLE_EXE=$(cat stable_exe.txt)
+          echo "stable executable: $STABLE_EXE"
+          "$STABLE_EXE" --appimage-version || "$STABLE_EXE" --version || true
+
+      - name: Smoke test development AppImage
+        run: |
+          python3 scripts/find_mgba_exe.py artifacts/bundle/payload/dev > dev_exe.txt
+          DEV_EXE=$(cat dev_exe.txt)
+          echo "dev executable: $DEV_EXE"
+          "$DEV_EXE" --appimage-version || "$DEV_EXE" --version || true
+
+      - name: Inventory payload
+        run: |
+          {
+            echo '# stable'
+            find artifacts/bundle/payload/stable -maxdepth 4 -type f | sort
+            echo
+            echo '# dev'
+            find artifacts/bundle/payload/dev -maxdepth 4 -type f | sort
+          } > artifacts/bundle/FILE_LIST.txt
+          {
+            echo '# stable'
+            find artifacts/bundle/payload/stable -type f -perm /111 -print | sort
+            echo
+            echo '# dev'
+            find artifacts/bundle/payload/dev -type f -perm /111 -print | sort
+          } > artifacts/bundle/EXECUTABLES.txt
+          {
+            echo '# stable'
+            file $(find artifacts/bundle/payload/stable -type f | sort) || true
+            echo
+            echo '# dev'
+            file $(find artifacts/bundle/payload/dev -type f | sort) || true
+          } > artifacts/bundle/FILE_TYPES.txt
+          : > artifacts/bundle/LDD.txt
+          while IFS= read -r exe; do
+            echo "===== $exe =====" >> artifacts/bundle/LDD.txt
+            ldd "$exe" >> artifacts/bundle/LDD.txt || true
+            echo >> artifacts/bundle/LDD.txt
+          done < <(find artifacts/bundle/payload -type f -perm /111 | sort)
+          jq -n \
+            --arg stable_url "$MGBA_STABLE_URL" \
+            --arg dev_url "$MGBA_DEV_URL" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{built_at:$built_at,stable_url:$stable_url,dev_url:$dev_url}' \
+            > artifacts/bundle/BUILD_INFO.json
+
+      - name: Pack artifact
+        run: |
+          cd artifacts
+          zip -r som_mgba_binaries_and_tools_linux_appimage.zip bundle
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: som-mgba-binaries-and-tools-linux-appimage
+          path: artifacts/som_mgba_binaries_and_tools_linux_appimage.zip
+          if-no-files-found: error
