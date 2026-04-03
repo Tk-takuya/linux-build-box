@@ -115,14 +115,28 @@ jobs:
         run: |
           echo "Using: $CUTTER_BIN"
           file "$CUTTER_BIN"
-          ldd "$CUTTER_BIN" | tee cutter_ldd.log
-          echo "---- not found only ----"
-          ldd "$CUTTER_BIN" | grep "not found" || true
+
+          echo "==== raw ldd ===="
+          ldd "$CUTTER_BIN" | tee cutter_ldd_raw.log || true
+
+          echo "==== ldd with bundle lib paths ===="
+          export LD_LIBRARY_PATH="$PWD/bundle/lib:$PWD/bundle/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          ldd "$CUTTER_BIN" | tee cutter_ldd_with_bundle_env.log || true
+
+          echo "---- not found only (raw) ----"
+          grep "not found" cutter_ldd_raw.log || true
+
+          echo "---- not found only (with bundle env) ----"
+          grep "not found" cutter_ldd_with_bundle_env.log || true
 
       - name: Inspect bundle libs
         working-directory: cutter-src
         run: |
+          echo "==== bundle/lib ===="
           find bundle/lib -maxdepth 3 -type f | sort | sed -n '1,300p' || true
+
+          echo "==== bundle libdirs ===="
+          find bundle -maxdepth 3 -type d \( -name lib -o -path '*/lib/*' \) | sort || true
 
       - name: Prepare quick run wrapper
         working-directory: cutter-src
@@ -131,7 +145,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           HERE="$(cd "$(dirname "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="$HERE/lib:$HERE/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           exec "$HERE/bin/cutter" "$@"
           EOF
           chmod +x bundle/run-cutter.sh
