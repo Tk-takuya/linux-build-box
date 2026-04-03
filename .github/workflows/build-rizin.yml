@@ -48,20 +48,28 @@ jobs:
             --buildtype=release \
             --prefix="$PWD/out"
 
-      - name: Show configure result
-        working-directory: rizin-src
-        run: |
-          test -d build
-          test -f build/build.ninja
-          ls -la build | sed -n '1,120p'
-
       - name: Build Rizin
         working-directory: rizin-src
         run: |
           ninja -C build
 
-      - name: Show built binaries
+      - name: Install Rizin
         working-directory: rizin-src
         run: |
-          find build -type f \( -name rizin -o -name rz-bin -o -name rz-asm -o -name rz-diff -o -name rz-ax \) | sort || true
-          find build -type f | sed -n '1,200p'
+          meson install -C build
+
+      - name: Show installed tree
+        working-directory: rizin-src
+        run: |
+          test -d out
+          find out -maxdepth 3 -type f | sort | sed -n '1,240p'
+
+      - name: Smoke test installed binaries
+        working-directory: rizin-src
+        run: |
+          test -x out/bin/rizin || test -x out/bin/rizin.exe || true
+          out/bin/rizin -v || true
+          out/bin/rz-bin -v
+          out/bin/rz-asm -v
+          out/bin/rz-diff -v
+          out/bin/rz-ax -v
