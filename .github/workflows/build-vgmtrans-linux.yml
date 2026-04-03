@@ -37,13 +37,37 @@ jobs:
             build-essential \
             cmake \
             ninja-build \
+            file \
+            xvfb \
             qt6-base-dev \
             qt6-base-private-dev \
             qt6-shadertools-dev \
             libqt6svg6-dev \
             libxcb-cursor-dev \
-            xvfb \
-            file
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libgtk-3-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-glx0-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render-util0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-sync-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libxcb1-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrender-dev
 
       - name: Show tool versions
         run: |
@@ -69,7 +93,7 @@ jobs:
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
-          cmake --build --preset linux-x64-release -j"$(nproc)"
+          cmake --build --preset linux-x64-release -j"$(nproc)" --verbose
 
       - name: Install bundle
         working-directory: vgmtrans-src
