@@ -1,0 +1,185 @@
+name: build-mesen2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+
+      - name: Clone Mesen2 source
+        run: |
+          git clone --recursive https://github.com/SourMesen/Mesen2.git mesen2-src
+
+      - name: Inspect source tree
+        working-directory: mesen2-src
+        run: |
+          echo "==== top level ===="
+          ls -la
+          echo "==== key paths ===="
+          ls -la Linux || true
+          ls -la Sdl || true
+          ls -la UI || true
+          echo "==== make-related files ===="
+          find . -maxdepth 3 \( -name makefile -o -name Makefile -o -name build.sh -o -name COMPILING.md \) | sort
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc \
+            g++ \
+            clang \
+            make \
+            pkg-config \
+            git \
+            zip \
+            libsdl2-dev \
+            libgtk-3-dev \
+            libepoxy-dev \
+            libglu1-mesa-dev \
+            zlib1g-dev \
+            libslang2-dev \
+            libminizip-dev \
+            libsqlite3-dev \
+            libx11-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libasound2-dev \
+            libpulse-dev
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          c++ --version | head -n 1
+          clang --version | head -n 1
+          make --version | head -n 1
+          pkg-config --version
+          sdl2-config --version
+
+      - name: Build Mesen2 native Linux first pass
+        working-directory: mesen2-src
+        run: |
+          set -euo pipefail
+
+          echo "==== pkg-config SDL2 ===="
+          pkg-config --modversion sdl2 || true
+          pkg-config --cflags sdl2 || true
+          pkg-config --libs sdl2 || true
+
+          echo "==== root makefile head ===="
+          sed -n '1,160p' makefile || true
+
+          make -j"$(nproc)"
+
+      - name: Locate built binary
+        working-directory: mesen2-src
+        run: |
+          echo "==== executable files ===="
+          find . -maxdepth 6 -type f -executable | sort | sed -n '1,300p'
+
+          BIN_CANDIDATE=""
+          for p in \
+            ./bin/Release/net8.0/linux-x64/publish/Mesen \
+            ./bin/Release/net8.0/linux-x64/publish/Mesen2 \
+            ./Linux/bin/Release/net8.0/linux-x64/publish/Mesen \
+            ./Linux/bin/Release/net8.0/linux-x64/publish/Mesen2 \
+            ./Mesen \
+            ./Mesen2
+          do
+            if [ -x "$p" ]; then
+              BIN_CANDIDATE="$p"
+              break
+            fi
+          done
+
+          if [ -z "$BIN_CANDIDATE" ]; then
+            BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(Mesen|Mesen2)$' | head -n 1 || true)"
+          fi
+
+          if [ -z "$BIN_CANDIDATE" ]; then
+            echo "No Mesen2 executable found"
+            exit 1
+          fi
+
+          echo "MESEN2_BIN=$BIN_CANDIDATE" >> "$GITHUB_ENV"
+          echo "Selected binary: $BIN_CANDIDATE"
+
+      - name: Inspect built binary
+        working-directory: mesen2-src
+        run: |
+          echo "Using: $MESEN2_BIN"
+          file "$MESEN2_BIN"
+          ldd "$MESEN2_BIN" | tee mesen2_ldd_raw.log || true
+          echo "---- not found only (raw) ----"
+          grep "not found" mesen2_ldd_raw.log || true
+
+      - name: Prepare portable bundle
+        working-directory: mesen2-src
+        run: |
+          rm -rf bundle
+          mkdir -p bundle/bin
+          cp -a "$MESEN2_BIN" bundle/bin/mesen2
+
+          BIN_DIR="$(dirname "$MESEN2_BIN")"
+
+          if [ -d "$BIN_DIR" ]; then
+            mkdir -p bundle/runtime
+            cp -a "$BIN_DIR"/. bundle/runtime/ || true
+          fi
+
+          if [ -f LICENSE ]; then
+            cp -a LICENSE bundle/
+          fi
+
+          echo "==== bundle tree ===="
+          find bundle -maxdepth 6 -type f | sort | sed -n '1,400p'
+
+      - name: Prepare wrapper
+        working-directory: mesen2-src
+        run: |
+          cat > bundle/run-mesen2.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          exec "$HERE/bin/mesen2" "$@"
+          EOF
+          chmod +x bundle/run-mesen2.sh
+
+      - name: Smoke test help/version
+        working-directory: mesen2-src
+        run: |
+          bundle/bin/mesen2 --help | sed -n '1,40p' || true
+          bundle/bin/mesen2 --version || true
+
+      - name: Upload artifact bundle dir
+        uses: actions/upload-artifact@v6
+        with:
+          name: mesen2_linux_x86_64_bundle_dir
+          path: mesen2-src/bundle
+          if-no-files-found: error
+
+      - name: Pack bundle zip
+        working-directory: mesen2-src
+        run: |
+          cd bundle
+          zip -r ../mesen2_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: mesen2_linux_x86_64_bundle_zip
+          path: mesen2-src/mesen2_linux_x86_64_bundle.zip
+          if-no-files-found: error
