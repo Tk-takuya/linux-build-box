@@ -1,0 +1,217 @@
+name: build-rz-ghidra
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+
+      - name: Clone Rizin/Cutter/rz-ghidra sources
+        run: |
+          git clone --recursive --branch dev https://github.com/rizinorg/rizin.git rizin-src
+          git clone --recursive --branch dev https://github.com/rizinorg/cutter.git cutter-src
+          git clone --recursive --branch dev https://github.com/rizinorg/rz-ghidra.git rz-ghidra-src
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            meson \
+            ninja-build \
+            pkgconf \
+            git \
+            zip \
+            libssl-dev \
+            libzip-dev \
+            zlib1g-dev \
+            qt6-base-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            libqt6svg6-dev \
+            libqt6core5compat6-dev \
+            libqt6svgwidgets6 \
+            qt6-l10n-tools \
+            libgraphviz-dev \
+            capstone-tool \
+            libcapstone-dev
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          cmake --version | head -n 1
+          meson --version
+          ninja --version
+          pkgconf --version
+          git --version
+
+      - name: Build and install Rizin
+        working-directory: rizin-src
+        run: |
+          meson setup build \
+            --buildtype=release \
+            --prefix="$PWD/out"
+          ninja -C build
+          meson install -C build
+          test -x out/bin/rizin
+          out/bin/rz-bin -v
+          out/bin/rz-asm -v
+          out/bin/rz-diff -v
+          out/bin/rz-ax -v
+
+      - name: Build and install Cutter against built Rizin
+        working-directory: cutter-src
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/out" \
+            -DCUTTER_USE_BUNDLED_RIZIN=OFF \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/rizin-src/out"
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+          test -x out/bin/cutter || test -x out/bin/Cutter
+
+      - name: Build and install rz-ghidra
+        working-directory: rz-ghidra-src
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/../out" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/rizin-src/out;$GITHUB_WORKSPACE/cutter-src/out" \
+            -DBUILD_CUTTER_PLUGIN=ON
+          cmake --build . -j"$(nproc)"
+          cmake --install .
+
+      - name: Prepare portable bundle
+        run: |
+          rm -rf bundle
+          mkdir -p bundle
+
+          cp -a rizin-src/out/. bundle/
+          cp -a cutter-src/out/. bundle/
+
+          mkdir -p bundle/rz-ghidra-install
+          cp -a rz-ghidra-src/out/. bundle/rz-ghidra-install/
+
+          mkdir -p bundle/lib/rizin/plugins
+          mkdir -p bundle/share/rizin
+
+          find rz-ghidra-src/out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -print -exec cp -a {} bundle/lib/rizin/plugins/ \; || true
+
+          if [ -d rz-ghidra-src/out/share/rizin ]; then
+            cp -a rz-ghidra-src/out/share/rizin/. bundle/share/rizin/
+          fi
+
+          if [ -d rz-ghidra-src/out/lib/rizin/plugins ]; then
+            cp -a rz-ghidra-src/out/lib/rizin/plugins/. bundle/lib/rizin/plugins/
+          fi
+
+          if [ -d rz-ghidra-src/out/lib/x86_64-linux-gnu/rizin/plugins ]; then
+            mkdir -p bundle/lib/x86_64-linux-gnu/rizin/plugins
+            cp -a rz-ghidra-src/out/lib/x86_64-linux-gnu/rizin/plugins/. bundle/lib/x86_64-linux-gnu/rizin/plugins/
+          fi
+
+          find bundle -maxdepth 5 -type f | sort | sed -n '1,400p'
+
+      - name: Inspect plugin files
+        run: |
+          echo "==== plugin candidates ===="
+          find bundle -type f | grep -E 'ghidra|decomp|sleigh|plugins/.+\.so' | sort || true
+
+          echo "==== share/rizin ===="
+          find bundle/share/rizin -maxdepth 4 -type f | sort | sed -n '1,240p' || true
+
+      - name: Prepare wrappers
+        run: |
+          cat > bundle/run-rizin.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib:$HERE/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export RZ_LIBR_PLUGINS="$HERE/lib/rizin/plugins${RZ_LIBR_PLUGINS+:$RZ_LIBR_PLUGINS}"
+          export RZ_EXTRA_PLUGINS="$HERE/lib/x86_64-linux-gnu/rizin/plugins${RZ_EXTRA_PLUGINS+:$RZ_EXTRA_PLUGINS}"
+          export RZ_USER_PLUGINS="$HERE/lib/rizin/plugins${RZ_USER_PLUGINS+:$RZ_USER_PLUGINS}"
+          exec "$HERE/bin/rizin" "$@"
+          EOF
+          chmod +x bundle/run-rizin.sh
+
+          cat > bundle/run-cutter.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib:$HERE/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export QT_PLUGIN_PATH="$HERE/plugins${QT_PLUGIN_PATH+:$QT_PLUGIN_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/plugins/platforms${QT_QPA_PLATFORM_PLUGIN_PATH+:$QT_QPA_PLATFORM_PLUGIN_PATH}"
+          export RZ_LIBR_PLUGINS="$HERE/lib/rizin/plugins${RZ_LIBR_PLUGINS+:$RZ_LIBR_PLUGINS}"
+          export RZ_EXTRA_PLUGINS="$HERE/lib/x86_64-linux-gnu/rizin/plugins${RZ_EXTRA_PLUGINS+:$RZ_EXTRA_PLUGINS}"
+          export RZ_USER_PLUGINS="$HERE/lib/rizin/plugins${RZ_USER_PLUGINS+:$RZ_USER_PLUGINS}"
+          exec "$HERE/bin/cutter" "$@"
+          EOF
+          chmod +x bundle/run-cutter.sh
+
+      - name: Smoke test raw rizin ldd
+        run: |
+          ldd bundle/bin/rizin | tee rizin_ldd_raw.log || true
+          echo "---- not found only (raw rizin) ----"
+          grep "not found" rizin_ldd_raw.log || true
+
+      - name: Smoke test plugin-aware rizin
+        run: |
+          export LD_LIBRARY_PATH="$PWD/bundle/lib:$PWD/bundle/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export RZ_LIBR_PLUGINS="$PWD/bundle/lib/rizin/plugins${RZ_LIBR_PLUGINS+:$RZ_LIBR_PLUGINS}"
+          export RZ_EXTRA_PLUGINS="$PWD/bundle/lib/x86_64-linux-gnu/rizin/plugins${RZ_EXTRA_PLUGINS+:$RZ_EXTRA_PLUGINS}"
+          export RZ_USER_PLUGINS="$PWD/bundle/lib/rizin/plugins${RZ_USER_PLUGINS+:$RZ_USER_PLUGINS}"
+
+          bundle/bin/rizin -v
+
+          echo "==== pdg help probe ===="
+          bundle/bin/rizin -q -c "pdg?" - || true
+
+          echo "==== pdgs probe ===="
+          bundle/bin/rizin -q -c "pdgs" - || true
+
+      - name: Smoke test Cutter ldd with bundle env
+        run: |
+          CUTTER_BIN="bundle/bin/cutter"
+          if [ ! -x "$CUTTER_BIN" ]; then
+            CUTTER_BIN="bundle/bin/Cutter"
+          fi
+          test -x "$CUTTER_BIN"
+
+          export LD_LIBRARY_PATH="$PWD/bundle/lib:$PWD/bundle/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          ldd "$CUTTER_BIN" | tee cutter_ldd_with_bundle_env.log || true
+
+          echo "---- not found only (cutter with bundle env) ----"
+          grep "not found" cutter_ldd_with_bundle_env.log || true
+
+      - name: Upload artifact bundle dir
+        uses: actions/upload-artifact@v6
+        with:
+          name: rz-ghidra_linux_x86_64_bundle_dir
+          path: bundle
+          if-no-files-found: error
+
+      - name: Pack bundle zip
+        run: |
+          cd bundle
+          zip -r ../rz-ghidra_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: rz-ghidra_linux_x86_64_bundle_zip
+          path: rz-ghidra_linux_x86_64_bundle.zip
+          if-no-files-found: error
