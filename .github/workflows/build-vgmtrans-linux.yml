@@ -68,24 +68,40 @@ jobs:
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out/bin"
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out" || true
+
+      - name: Locate built binaries
+        working-directory: vgmtrans-src
+        run: |
+          set -euxo pipefail
+          echo "== search build tree for candidates =="
+          find build/linux-x64 -type f \( -name 'vgmtrans-cli' -o -name 'vgmtrans-shell' \) | sort || true
 
       - name: Stage CLI and shell binaries
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out/bin"
-          test -f build/linux-x64/Release/bin/vgmtrans-cli
-          cp -fv build/linux-x64/Release/bin/vgmtrans-cli "$GITHUB_WORKSPACE/out/bin/"
-          if [ -f build/linux-x64/Release/bin/vgmtrans-shell ]; then
-            cp -fv build/linux-x64/Release/bin/vgmtrans-shell "$GITHUB_WORKSPACE/out/bin/"
+
+          CLI_PATH="$(find build/linux-x64 -type f -name 'vgmtrans-cli' | sort | head -n 1 || true)"
+          SHELL_PATH="$(find build/linux-x64 -type f -name 'vgmtrans-shell' | sort | head -n 1 || true)"
+
+          test -n "$CLI_PATH"
+          cp -fv "$CLI_PATH" "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
+
+          if [ -n "$SHELL_PATH" ]; then
+            cp -fv "$SHELL_PATH" "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell"
           fi
 
       - name: Inspect outputs
         run: |
           set -euxo pipefail
+          echo "== installed/staged files =="
           find "$GITHUB_WORKSPACE/out" -maxdepth 5 -type f | sort
-          file "$GITHUB_WORKSPACE"/out/bin/*
+          echo
+          echo "== file types =="
+          file "$GITHUB_WORKSPACE"/out/bin/* || true
 
       - name: Verify CLI
         run: |
@@ -98,7 +114,7 @@ jobs:
         run: |
           set -euxo pipefail
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
-            file "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell"
+            "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" --help || true
             ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" || true
           fi
 
