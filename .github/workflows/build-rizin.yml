@@ -19,8 +19,24 @@ jobs:
         run: |
           git clone --recursive https://github.com/rizinorg/rizin.git rizin-src
 
-      - name: Show cloned tree
+      - name: Install build dependencies
         run: |
-          ls -la
-          ls -la rizin-src
-          find rizin-src -maxdepth 2 -type f | sort | sed -n '1,120p'
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            meson \
+            ninja-build \
+            pkg-config \
+            git \
+            libssl-dev \
+            libzip-dev \
+            capstone-tool \
+            libcapstone-dev
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          meson --version
+          ninja --version
+          pkg-config --version
+          git --version
