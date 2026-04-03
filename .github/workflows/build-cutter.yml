@@ -67,36 +67,78 @@ jobs:
         run: |
           cmake --install build
 
-      - name: Show installed tree
+      - name: Prepare bundle directory
         working-directory: cutter-src
         run: |
-          test -d out
-          find out -maxdepth 4 -type f | sort | sed -n '1,260p'
+          rm -rf bundle
+          mkdir -p bundle
+          cp -a out/. bundle/
+          find bundle -maxdepth 4 -type f | sort | sed -n '1,300p'
 
-      - name: Smoke test Cutter binary presence
+      - name: Locate Cutter binary
         working-directory: cutter-src
         run: |
-          test -x out/bin/cutter || test -x out/bin/Cutter
-          if [ -x out/bin/cutter ]; then
-            file out/bin/cutter
-            ldd out/bin/cutter || true
+          if [ -x bundle/bin/cutter ]; then
+            echo "CUTTER_BIN=bundle/bin/cutter" >> "$GITHUB_ENV"
+          elif [ -x bundle/bin/Cutter ]; then
+            echo "CUTTER_BIN=bundle/bin/Cutter" >> "$GITHUB_ENV"
+          else
+            echo "Cutter binary not found in bundle/bin"
+            ls -la bundle/bin || true
+            exit 1
           fi
-          if [ -x out/bin/Cutter ]; then
-            file out/bin/Cutter
-            ldd out/bin/Cutter || true
-          fi
+
+      - name: Smoke test Rizin side
+        working-directory: cutter-src
+        run: |
+          bundle/bin/rizin -v
+          bundle/bin/rz-bin -v
+          bundle/bin/rz-asm -v
+          bundle/bin/rz-diff -v
+          bundle/bin/rz-ax -v
+
+      - name: Inspect Cutter binary
+        working-directory: cutter-src
+        run: |
+          echo "Using: $CUTTER_BIN"
+          file "$CUTTER_BIN"
+          ldd "$CUTTER_BIN" | tee cutter_ldd.log
+          echo "---- not found only ----"
+          ldd "$CUTTER_BIN" | grep "not found" || true
+
+      - name: Inspect Rizin libs in bundle
+        working-directory: cutter-src
+        run: |
+          find bundle/lib -maxdepth 3 -type f | sort | sed -n '1,300p' || true
+
+      - name: Prepare quick run wrapper
+        working-directory: cutter-src
+        run: |
+          cat > bundle/run-cutter.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          exec "$HERE/bin/cutter" "$@"
+          EOF
+          chmod +x bundle/run-cutter.sh
 
       - name: Pack bundle
         working-directory: cutter-src
         run: |
-          mkdir -p bundle
-          cp -a out/. bundle/
           cd bundle
           zip -r ../cutter_linux_x86_64_bundle.zip .
 
-      - name: Upload artifact
+      - name: Upload artifact bundle dir
         uses: actions/upload-artifact@v6
         with:
-          name: cutter_linux_x86_64_bundle
+          name: cutter_linux_x86_64_bundle_dir
+          path: cutter-src/bundle
+          if-no-files-found: error
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: cutter_linux_x86_64_bundle_zip
           path: cutter-src/cutter_linux_x86_64_bundle.zip
           if-no-files-found: error
