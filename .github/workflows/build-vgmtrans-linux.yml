@@ -1,4 +1,4 @@
-name: build-vgmtrans-linux-gui-nondeploy
+name: build-vgmtrans-linux-gui-aqt
 
 on:
   workflow_dispatch:
@@ -9,7 +9,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
+
+    env:
+      QT_VERSION: 6.9.3
+      QT_OUTPUT_DIR: ${{ github.workspace }}/qt
+      QT_HOST: linux
+      QT_TARGET: desktop
+      QT_ARCH: gcc_64
 
     steps:
       - name: Checkout workflow repo
@@ -29,7 +36,7 @@ jobs:
           test -f CMakePresets.json
           git submodule status
 
-      - name: Install dependencies
+      - name: Install host dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update
@@ -37,13 +44,11 @@ jobs:
             build-essential \
             cmake \
             ninja-build \
+            python3 \
+            python3-pip \
             file \
             xvfb \
-            qt6-base-dev \
-            qt6-base-private-dev \
-            qt6-shadertools-dev \
-            libqt6svg6-dev \
-            libxcb-cursor-dev \
+            libgl1-mesa-dev \
             libfontconfig1-dev \
             libfreetype-dev \
             libgtk-3-dev \
@@ -69,12 +74,42 @@ jobs:
             libxkbcommon-x11-dev \
             libxrender-dev
 
+      - name: Install aqtinstall
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade aqtinstall
+
+      - name: Install Qt 6.9.3 with aqtinstall
+        run: |
+          set -euxo pipefail
+          mkdir -p "$QT_OUTPUT_DIR"
+          python3 -m aqt install-qt \
+            -O "$QT_OUTPUT_DIR" \
+            "$QT_HOST" \
+            "$QT_TARGET" \
+            "$QT_VERSION" \
+            "$QT_ARCH" \
+            -m qtshadertools \
+            --archives qtbase qtsvg
+
+      - name: Define Qt paths
+        run: |
+          set -euxo pipefail
+          QT_ROOT="$QT_OUTPUT_DIR/$QT_VERSION/$QT_ARCH"
+          echo "QT_ROOT=$QT_ROOT" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> "$GITHUB_ENV"
+          test -d "$QT_ROOT"
+          find "$QT_ROOT" -maxdepth 2 -type d | sort | sed -n '1,120p'
+
       - name: Show tool versions
         run: |
           set -euxo pipefail
           cmake --version
           ninja --version
           g++ --version
+          python3 -m aqt version
+          test -d "$QT_ROOT/lib/cmake/Qt6"
 
       - name: Configure
         working-directory: vgmtrans-src
@@ -87,6 +122,7 @@ jobs:
             -DENABLE_SHELL=ON \
             -DINSTALL_SHELL=ON \
             -DNO_QT_DEPLOY=ON \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT" \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out"
 
       - name: Build
