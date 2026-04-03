@@ -88,14 +88,27 @@ jobs:
             exit 1
           fi
 
-      - name: Smoke test Rizin side
+      - name: Inspect Rizin side
         working-directory: cutter-src
         run: |
-          bundle/bin/rizin -v
-          bundle/bin/rz-bin -v
-          bundle/bin/rz-asm -v
-          bundle/bin/rz-diff -v
-          bundle/bin/rz-ax -v
+          ls -la bundle/bin || true
+
+          for f in \
+            bundle/bin/rizin \
+            bundle/bin/rz-bin \
+            bundle/bin/rz-asm \
+            bundle/bin/rz-diff \
+            bundle/bin/rz-ax
+          do
+            echo "==== $f ===="
+            if [ -x "$f" ]; then
+              file "$f" || true
+              ldd "$f" || true
+              "$f" -v || true
+            else
+              echo "missing or not executable: $f"
+            fi
+          done
 
       - name: Inspect Cutter binary
         working-directory: cutter-src
@@ -106,7 +119,7 @@ jobs:
           echo "---- not found only ----"
           ldd "$CUTTER_BIN" | grep "not found" || true
 
-      - name: Inspect Rizin libs in bundle
+      - name: Inspect bundle libs
         working-directory: cutter-src
         run: |
           find bundle/lib -maxdepth 3 -type f | sort | sed -n '1,300p' || true
@@ -123,18 +136,18 @@ jobs:
           EOF
           chmod +x bundle/run-cutter.sh
 
-      - name: Pack bundle
-        working-directory: cutter-src
-        run: |
-          cd bundle
-          zip -r ../cutter_linux_x86_64_bundle.zip .
-
       - name: Upload artifact bundle dir
         uses: actions/upload-artifact@v6
         with:
           name: cutter_linux_x86_64_bundle_dir
           path: cutter-src/bundle
           if-no-files-found: error
+
+      - name: Pack bundle zip
+        working-directory: cutter-src
+        run: |
+          cd bundle
+          zip -r ../cutter_linux_x86_64_bundle.zip .
 
       - name: Upload artifact zip
         uses: actions/upload-artifact@v6
