@@ -16,7 +16,6 @@ jobs:
       QT_OUTPUT_DIR: ${{ github.workspace }}/qt
       QT_HOST: linux
       QT_TARGET: desktop
-      QT_ARCH: linux_gcc_64
 
     steps:
       - name: Checkout workflow repo
@@ -85,7 +84,15 @@ jobs:
           set -euxo pipefail
           python3 -m aqt list-qt "$QT_HOST" "$QT_TARGET" --arch "$QT_VERSION" | tee "$GITHUB_WORKSPACE/aqt_arch_list.txt"
 
-      - name: Install Qt 6.9.3 with aqtinstall
+      - name: Select Qt architecture
+        run: |
+          set -euxo pipefail
+          AQT_ARCH="$(tr ' ' '\n' < "$GITHUB_WORKSPACE/aqt_arch_list.txt" | grep -E '^(gcc_64|linux_gcc_64)$' | head -n 1)"
+          test -n "$AQT_ARCH"
+          echo "AQT_ARCH=$AQT_ARCH" >> "$GITHUB_ENV"
+          echo "Selected AQT_ARCH=$AQT_ARCH"
+
+      - name: Install Qt with aqtinstall
         run: |
           set -o pipefail
           mkdir -p "$QT_OUTPUT_DIR"
@@ -94,7 +101,7 @@ jobs:
             "$QT_HOST" \
             "$QT_TARGET" \
             "$QT_VERSION" \
-            "$QT_ARCH" \
+            "$AQT_ARCH" \
             -m qtshadertools \
             --archives qtbase qtsvg \
             2>&1 | tee "$GITHUB_WORKSPACE/aqt_install.log"
@@ -102,10 +109,13 @@ jobs:
       - name: Define Qt paths
         run: |
           set -euxo pipefail
-          QT_ROOT="$QT_OUTPUT_DIR/$QT_VERSION/$QT_ARCH"
+          QT_ROOT="$(find "$QT_OUTPUT_DIR/$QT_VERSION" -mindepth 1 -maxdepth 2 -type d -path '*/lib/cmake/Qt6' | sed 's#/lib/cmake/Qt6##' | sort | head -n 1)"
+          test -n "$QT_ROOT"
+          test -d "$QT_ROOT"
+          test -d "$QT_ROOT/lib/cmake/Qt6"
           echo "QT_ROOT=$QT_ROOT" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> "$GITHUB_ENV"
-          test -d "$QT_ROOT"
+          echo "Resolved QT_ROOT=$QT_ROOT"
           find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
 
       - name: Show tool versions
