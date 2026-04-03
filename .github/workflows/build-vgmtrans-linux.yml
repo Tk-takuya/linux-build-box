@@ -1,1 +1,86 @@
+name: build-vgmtrans-linux
 
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            qt6-base-dev \
+            qt6-base-private-dev \
+            qt6-shadertools-dev \
+            libqt6svg6-dev \
+            libxcb-cursor-dev \
+            xvfb \
+            file
+
+      - name: Show tool versions
+        run: |
+          cmake --version
+          ninja --version
+          g++ --version
+
+      - name: Configure
+        run: |
+          cmake --preset linux-x64 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out" \
+            -DINSTALL_SHELL=ON
+
+      - name: Build
+        run: |
+          cmake --build --preset linux-x64-release -j"$(nproc)"
+
+      - name: Install bundle
+        run: |
+          cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out"
+
+      - name: Inspect outputs
+        run: |
+          echo "== installed files =="
+          find "$GITHUB_WORKSPACE/out" -maxdepth 4 -type f | sort
+          echo
+          echo "== file types =="
+          file "$GITHUB_WORKSPACE"/out/bin/* || true
+
+      - name: Verify CLI and shell
+        run: |
+          test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
+          "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
+          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
+            "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" --help || true
+          fi
+
+      - name: Smoke test GUI under Xvfb
+        run: |
+          test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans"
+          timeout 10s xvfb-run -a "$GITHUB_WORKSPACE/out/bin/vgmtrans" || true
+
+      - name: Package tarball
+        run: |
+          tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_bundle.tar.gz .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: vgmtrans_linux_x86_64_bundle
+          path: vgmtrans_linux_x86_64_bundle.tar.gz
+          if-no-files-found: error
+          compression-level: 0
