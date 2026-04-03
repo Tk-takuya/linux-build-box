@@ -17,18 +17,25 @@ jobs:
 
       - name: Clone VGMTrans
         run: |
+          set -euxo pipefail
           git clone --recursive https://github.com/vgmtrans/vgmtrans.git vgmtrans-src
 
       - name: Sanity check source tree
         working-directory: vgmtrans-src
         run: |
-          pwd
+          set -euxo pipefail
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
           ls -la
           test -f CMakePresets.json
+          echo "== top files =="
+          find . -maxdepth 2 -type f | sort | sed -n '1,160p'
+          echo "== git submodules =="
           git submodule status
 
       - name: Install dependencies
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -44,6 +51,7 @@ jobs:
 
       - name: Show tool versions
         run: |
+          set -euxo pipefail
           cmake --version
           ninja --version
           g++ --version
@@ -51,6 +59,10 @@ jobs:
       - name: Configure
         working-directory: vgmtrans-src
         run: |
+          set -euxo pipefail
+          pwd
+          ls -la
+          test -f CMakePresets.json
           cmake --preset linux-x64 \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out" \
             -DINSTALL_SHELL=ON
@@ -58,15 +70,18 @@ jobs:
       - name: Build
         working-directory: vgmtrans-src
         run: |
+          set -euxo pipefail
           cmake --build --preset linux-x64-release -j"$(nproc)"
 
       - name: Install bundle
         working-directory: vgmtrans-src
         run: |
+          set -euxo pipefail
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out"
 
       - name: Inspect outputs
         run: |
+          set -euxo pipefail
           echo "== installed files =="
           find "$GITHUB_WORKSPACE/out" -maxdepth 5 -type f | sort
           echo
@@ -75,6 +90,7 @@ jobs:
 
       - name: Verify CLI and shell
         run: |
+          set -euxo pipefail
           test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli"
           "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
@@ -83,20 +99,26 @@ jobs:
 
       - name: Show dynamic deps
         run: |
+          set -euxo pipefail
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans" ]; then
             ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans" || true
           fi
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
             ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" || true
           fi
+          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
+            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" || true
+          fi
 
       - name: Smoke test GUI under Xvfb
         run: |
+          set -euxo pipefail
           test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans"
           timeout 10s xvfb-run -a "$GITHUB_WORKSPACE/out/bin/vgmtrans" || true
 
       - name: Package tarball
         run: |
+          set -euxo pipefail
           tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_bundle.tar.gz .
 
       - name: Upload artifact
