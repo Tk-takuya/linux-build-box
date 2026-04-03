@@ -9,13 +9,23 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout workflow repo
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Clone VGMTrans
+        run: |
+          git clone --recursive https://github.com/vgmtrans/vgmtrans.git vgmtrans-src
+
+      - name: Sanity check source tree
+        working-directory: vgmtrans-src
+        run: |
+          pwd
+          ls -la
+          test -f CMakePresets.json
+          git submodule status
 
       - name: Install dependencies
         run: |
@@ -39,23 +49,26 @@ jobs:
           g++ --version
 
       - name: Configure
+        working-directory: vgmtrans-src
         run: |
           cmake --preset linux-x64 \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out" \
             -DINSTALL_SHELL=ON
 
       - name: Build
+        working-directory: vgmtrans-src
         run: |
           cmake --build --preset linux-x64-release -j"$(nproc)"
 
       - name: Install bundle
+        working-directory: vgmtrans-src
         run: |
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out"
 
       - name: Inspect outputs
         run: |
           echo "== installed files =="
-          find "$GITHUB_WORKSPACE/out" -maxdepth 4 -type f | sort
+          find "$GITHUB_WORKSPACE/out" -maxdepth 5 -type f | sort
           echo
           echo "== file types =="
           file "$GITHUB_WORKSPACE"/out/bin/* || true
@@ -66,6 +79,15 @@ jobs:
           "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
           if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
             "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" --help || true
+          fi
+
+      - name: Show dynamic deps
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans" ]; then
+            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans" || true
+          fi
+          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
+            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" || true
           fi
 
       - name: Smoke test GUI under Xvfb
