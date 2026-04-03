@@ -64,6 +64,7 @@ jobs:
             --prefix="$PWD/out"
           ninja -C build
           meson install -C build
+
           test -x out/bin/rizin
           out/bin/rz-bin -v
           out/bin/rz-asm -v
@@ -72,27 +73,57 @@ jobs:
 
       - name: Build and install Cutter against built Rizin
         working-directory: cutter-src
+        env:
+          RIZIN_PREFIX: ${{ github.workspace }}/rizin-src/out
         run: |
-          cmake -B build \
+          echo "RIZIN_PREFIX=$RIZIN_PREFIX"
+
+          echo "==== inspect built rizin prefix ===="
+          find "$RIZIN_PREFIX" -maxdepth 5 -type f | sort | sed -n '1,300p'
+
+          export PKG_CONFIG_PATH="$RIZIN_PREFIX/lib/pkgconfig:$RIZIN_PREFIX/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}"
+          export CMAKE_PREFIX_PATH="$RIZIN_PREFIX${CMAKE_PREFIX_PATH+:$CMAKE_PREFIX_PATH}"
+
+          echo "==== pkg-config probe ===="
+          pkg-config --list-all | grep -i rizin || true
+          pkg-config --cflags rizin || true
+          pkg-config --libs rizin || true
+          find "$RIZIN_PREFIX" -type f \( -name '*.pc' -o -name '*Config.cmake' -o -name '*Targets.cmake' \) | sort | sed -n '1,300p' || true
+
+          echo "==== cmake configure cutter ===="
+          cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$PWD/out" \
             -DCUTTER_USE_BUNDLED_RIZIN=OFF \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/rizin-src/out"
-          cmake --build build -j"$(nproc)"
+            -DCMAKE_PREFIX_PATH="$RIZIN_PREFIX"
+
+          echo "==== cmake build cutter ===="
+          cmake --build build -j"$(nproc)" --verbose
+
+          echo "==== cmake install cutter ===="
           cmake --install build
+
           test -x out/bin/cutter || test -x out/bin/Cutter
 
       - name: Build and install rz-ghidra
         working-directory: rz-ghidra-src
+        env:
+          RIZIN_PREFIX: ${{ github.workspace }}/rizin-src/out
+          CUTTER_PREFIX: ${{ github.workspace }}/cutter-src/out
         run: |
+          echo "RIZIN_PREFIX=$RIZIN_PREFIX"
+          echo "CUTTER_PREFIX=$CUTTER_PREFIX"
+
           mkdir -p build
           cd build
-          cmake .. \
+
+          cmake .. -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$PWD/../out" \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/rizin-src/out;$GITHUB_WORKSPACE/cutter-src/out" \
+            -DCMAKE_PREFIX_PATH="$RIZIN_PREFIX;$CUTTER_PREFIX" \
             -DBUILD_CUTTER_PLUGIN=ON
-          cmake --build . -j"$(nproc)"
+
+          cmake --build . -j"$(nproc)" --verbose
           cmake --install .
 
       - name: Prepare portable bundle
