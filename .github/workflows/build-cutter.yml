@@ -1,0 +1,102 @@
+name: build-cutter
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+
+      - name: Clone Cutter source
+        run: |
+          git clone --recursive https://github.com/rizinorg/cutter.git cutter-src
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            meson \
+            ninja-build \
+            pkgconf \
+            git \
+            libzip-dev \
+            zlib1g-dev \
+            qt6-base-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            libqt6svg6-dev \
+            libqt6core5compat6-dev \
+            libqt6svgwidgets6 \
+            qt6-l10n-tools \
+            libgraphviz-dev
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          cmake --version | head -n 1
+          meson --version
+          ninja --version
+          pkgconf --version
+          git --version
+
+      - name: Configure Cutter
+        working-directory: cutter-src
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/out"
+
+      - name: Build Cutter
+        working-directory: cutter-src
+        run: |
+          cmake --build build -j"$(nproc)"
+
+      - name: Install Cutter
+        working-directory: cutter-src
+        run: |
+          cmake --install build
+
+      - name: Show installed tree
+        working-directory: cutter-src
+        run: |
+          test -d out
+          find out -maxdepth 4 -type f | sort | sed -n '1,260p'
+
+      - name: Smoke test Cutter binary presence
+        working-directory: cutter-src
+        run: |
+          test -x out/bin/cutter || test -x out/bin/Cutter
+          if [ -x out/bin/cutter ]; then
+            file out/bin/cutter
+            ldd out/bin/cutter || true
+          fi
+          if [ -x out/bin/Cutter ]; then
+            file out/bin/Cutter
+            ldd out/bin/Cutter || true
+          fi
+
+      - name: Pack bundle
+        working-directory: cutter-src
+        run: |
+          mkdir -p bundle
+          cp -a out/. bundle/
+          cd bundle
+          zip -r ../cutter_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cutter_linux_x86_64_bundle
+          path: cutter-src/cutter_linux_x86_64_bundle.zip
+          if-no-files-found: error
