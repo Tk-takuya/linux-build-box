@@ -34,6 +34,7 @@ jobs:
           : > "$GITHUB_WORKSPACE/build_full.log"
           : > "$GITHUB_WORKSPACE/build_tail_200.txt"
           : > "$GITHUB_WORKSPACE/build_tail_60.txt"
+          : > "$GITHUB_WORKSPACE/smoke_test.log"
 
       - name: Clone VGMTrans
         run: |
@@ -66,6 +67,7 @@ jobs:
             python3-pip \
             file \
             xvfb \
+            xauth \
             curl \
             libgl1-mesa-dev \
             libfontconfig1-dev \
@@ -213,7 +215,7 @@ jobs:
         run: |
           set -o pipefail
           echo "Verify qsb runtime: start" >> "$GITHUB_WORKSPACE/step_status.log"
-          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           {
             test -f "$QT_ROOT/bin/qsb"
             ldd "$QT_ROOT/bin/qsb" || true
@@ -238,7 +240,7 @@ jobs:
         run: |
           set -o pipefail
           echo "Configure: start" >> "$GITHUB_WORKSPACE/step_status.log"
-          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           test -f CMakePresets.json
           cmake --preset linux-x64 \
             -DENABLE_UI_QT=ON \
@@ -256,7 +258,7 @@ jobs:
         run: |
           set -o pipefail
           echo "Build: start" >> "$GITHUB_WORKSPACE/step_status.log"
-          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           cmake --build --preset linux-x64-release -j"$(nproc)" --verbose 2>&1 | tee "$GITHUB_WORKSPACE/build_full.log"
           echo "Build: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
@@ -273,7 +275,7 @@ jobs:
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
-          export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           mkdir -p "$GITHUB_WORKSPACE/out/bin"
           cmake --install build/linux-x64 --config Release --prefix "$GITHUB_WORKSPACE/out" || true
 
@@ -348,19 +350,52 @@ jobs:
             "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" --help || true
           fi
 
-      - name: Smoke test GUI under Xvfb
+      - name: Smoke test GUI
         if: success()
         run: |
-          set -euxo pipefail
-          test -f "$GITHUB_WORKSPACE/out/bin/vgmtrans"
-          set +e
-          timeout 10s xvfb-run -a "$GITHUB_WORKSPACE/out/bin/vgmtrans" > "$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
-          status=$?
-          set -e
-          cat "$RUNNER_TEMP/vgmtrans_gui.log" || true
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            exit "$status"
-          fi
+          set -o pipefail
+          echo "Smoke test GUI: start" >> "$GITHUB_WORKSPACE/step_status.log"
+
+          GUI_RUN="$(find "$GITHUB_WORKSPACE/vgmtrans-src/build/linux-x64" -type f -name 'vgmtrans' | sort | head -n 1)"
+          test -n "$GUI_RUN"
+          test -f "$GUI_RUN"
+
+          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib:$GITHUB_WORKSPACE/vgmtrans-src/lib/bass${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export QT_PLUGIN_PATH="$QT_ROOT/plugins"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$QT_ROOT/plugins/platforms"
+          export QT_QPA_PLATFORM=xcb
+
+          {
+            echo "GUI_RUN=$GUI_RUN"
+            echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+            echo "QT_PLUGIN_PATH=$QT_PLUGIN_PATH"
+            echo "QT_QPA_PLATFORM_PLUGIN_PATH=$QT_QPA_PLATFORM_PLUGIN_PATH"
+            ldd "$GUI_RUN" || true
+            ls -la "$QT_ROOT/plugins/platforms" || true
+
+            Xvfb :99 -screen 0 1280x720x24 > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            XVFB_PID=$!
+            trap 'kill $XVFB_PID || true' EXIT
+            sleep 2
+            export DISPLAY=:99
+
+            set +e
+            timeout 10s "$GUI_RUN" > "$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
+            STATUS=$?
+            set -e
+
+            echo "=== xvfb log ==="
+            cat "$RUNNER_TEMP/xvfb.log" || true
+            echo "=== gui log ==="
+            cat "$RUNNER_TEMP/vgmtrans_gui.log" || true
+            echo "SMOKE_STATUS=$STATUS"
+
+            if [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 124 ]; then
+              exit "$STATUS"
+            fi
+          } 2>&1 | tee "$GITHUB_WORKSPACE/smoke_test.log"
+
+          echo "Smoke test GUI: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Package tarball
         if: success()
@@ -393,5 +428,6 @@ jobs:
             ${{ github.workspace }}/build_full.log
             ${{ github.workspace }}/build_tail_200.txt
             ${{ github.workspace }}/build_tail_60.txt
+            ${{ github.workspace }}/smoke_test.log
           if-no-files-found: error
           compression-level: 0
