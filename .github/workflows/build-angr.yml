@@ -1,0 +1,165 @@
+name: build-angr
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+          python3 --version || true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3 \
+            python3-venv \
+            python3-dev \
+            build-essential \
+            gcc \
+            g++ \
+            make \
+            git \
+            zip \
+            libffi-dev \
+            libssl-dev \
+            libxml2-dev \
+            libxslt1-dev \
+            zlib1g-dev \
+            libglib2.0-dev
+
+      - name: Create venv
+        run: |
+          python3 -m venv angr-env
+          . angr-env/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install angr from PyPI
+        run: |
+          . angr-env/bin/activate
+          python -m pip install angr
+
+      - name: Show installed package versions
+        run: |
+          . angr-env/bin/activate
+          python - << 'PY'
+          import sys
+          import angr
+          import archinfo
+          import cle
+          import claripy
+          import pyvex
+          print("python:", sys.version)
+          print("angr:", angr.__version__)
+          print("archinfo:", archinfo.__version__)
+          print("cle:", cle.__version__)
+          print("claripy:", claripy.__version__)
+          print("pyvex:", pyvex.__version__)
+          PY
+
+      - name: Smoke test angr import and basic project API
+        run: |
+          . angr-env/bin/activate
+          python - << 'PY'
+          import angr
+          import tempfile
+          import subprocess
+          import os
+          import textwrap
+
+          c_src = r'''
+          #include <stdio.h>
+          int main() {
+            puts("hello");
+            return 0;
+          }
+          '''
+          with tempfile.TemporaryDirectory() as td:
+            c_path = os.path.join(td, "hello.c")
+            bin_path = os.path.join(td, "hello")
+            with open(c_path, "w", encoding="utf-8") as f:
+              f.write(c_src)
+            subprocess.check_call(["gcc", c_path, "-o", bin_path])
+            proj = angr.Project(bin_path, auto_load_libs=False)
+            cfg = proj.analyses.CFGFast()
+            print("entry:", hex(proj.entry))
+            print("functions:", len(cfg.kb.functions))
+            assert len(cfg.kb.functions) > 0
+          print("angr smoke test ok")
+          PY
+
+      - name: Prepare portable bundle
+        run: |
+          rm -rf bundle
+          mkdir -p bundle
+          cp -a angr-env bundle/venv
+
+          cat > bundle/run-angr-python.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          exec "$HERE/venv/bin/python" "$@"
+          EOF
+          chmod +x bundle/run-angr-python.sh
+
+          cat > bundle/run-angr-ipython.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          exec "$HERE/venv/bin/python" -i "$@"
+          EOF
+          chmod +x bundle/run-angr-ipython.sh
+
+          cat > bundle/ANGR_QUICKTEST.py << 'EOF'
+          import angr
+          import sys
+          print("angr version:", angr.__version__)
+          print("python:", sys.version)
+          EOF
+
+          cat > bundle/README_ANGR.txt << 'EOF'
+          angr bundle
+          
+          Run:
+            ./run-angr-python.sh ANGR_QUICKTEST.py
+          
+          Or interactive:
+            ./run-angr-ipython.sh
+          
+          Example:
+            ./run-angr-python.sh your_script.py
+          EOF
+
+          find bundle -maxdepth 3 -type f | sort | sed -n '1,300p'
+
+      - name: Verify bundled python
+        run: |
+          bundle/run-angr-python.sh bundle/ANGR_QUICKTEST.py
+
+      - name: Upload artifact bundle dir
+        uses: actions/upload-artifact@v6
+        with:
+          name: angr_linux_x86_64_bundle_dir
+          path: bundle
+          if-no-files-found: error
+
+      - name: Pack bundle zip
+        run: |
+          cd bundle
+          zip -r ../angr_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: angr_linux_x86_64_bundle_zip
+          path: angr_linux_x86_64_bundle.zip
+          if-no-files-found: error
