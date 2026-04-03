@@ -156,9 +156,6 @@ jobs:
               -o Dir::Etc::sourceparts="-" \
               download libicu73=73.1~rc-1
 
-            echo "=== downloaded files ==="
-            ls -l "$WORKROOT"
-
             DEB_PATH="$(find "$WORKROOT" -maxdepth 1 -type f -name 'libicu73_73.1~rc-1_*.deb' | head -n 1)"
             test -n "$DEB_PATH"
             file "$DEB_PATH"
@@ -337,7 +334,12 @@ jobs:
           fi
 
           cp -a "$QT_ROOT/plugins" "$BUNDLE_ROOT/"
+
           cp -Lv "$ICU73_LIBDIR"/libicu*.so.73 "$BUNDLE_ROOT/lib/"
+          cp -Lv "$QT_ROOT"/lib/libQt6*.so* "$BUNDLE_ROOT/lib/" || true
+          cp -Lv "$QT_ROOT"/lib/libicui18n.so* "$BUNDLE_ROOT/lib/" || true
+          cp -Lv "$QT_ROOT"/lib/libicuuc.so* "$BUNDLE_ROOT/lib/" || true
+          cp -Lv "$QT_ROOT"/lib/libicudata.so* "$BUNDLE_ROOT/lib/" || true
 
           if [ -d "$GITHUB_WORKSPACE/vgmtrans-src/lib/bass" ]; then
             cp -Lv "$GITHUB_WORKSPACE/vgmtrans-src/lib/bass"/libbass*.so "$BUNDLE_ROOT/lib/" || true
