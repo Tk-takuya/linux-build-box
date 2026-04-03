@@ -25,63 +25,67 @@ jobs:
         run: |
           echo "==== top level ===="
           ls -la
-          echo "==== key paths ===="
-          ls -la desktop-ui || true
-          ls -la ares || true
-          echo "==== makefiles ===="
-          find . -maxdepth 3 \( -name Makefile -o -name GNUmakefile -o -name makefile \) | sort || true
+          echo "==== key files ===="
+          ls -la CMakeLists.txt CMakePresets.json README.md || true
+          echo "==== top directories ===="
+          find . -maxdepth 2 -type d | sort | sed -n '1,200p'
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
-            gcc \
-            g++ \
-            make \
+            cmake \
+            ninja-build \
             pkg-config \
+            curl \
             git \
             zip \
             libgtk-3-dev \
             libcanberra-gtk-module \
-            libgl1-mesa-dev \
+            libgl-dev \
             libasound2-dev \
             libao-dev \
             libopenal-dev \
+            libsdl3-dev \
             libpulse-dev \
-            libxrandr-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxinerama-dev \
             libudev-dev
 
       - name: Show toolchain versions
         run: |
           cc --version | head -n 1
           c++ --version | head -n 1
-          make --version | head -n 1
+          cmake --version | head -n 1
+          ninja --version
           pkg-config --version
 
-      - name: Build ares release gtk3
+      - name: Configure ares
         working-directory: ares-src
         run: |
-          set -euo pipefail
-          make build=release hiro=gtk3 -j"$(nproc)"
+          mkdir -p build
+          cd build
+          cmake .. -G Ninja
+
+      - name: Build ares
+        working-directory: ares-src
+        run: |
+          cd build
+          cmake --build . -j"$(nproc)"
 
       - name: Locate built binary
         working-directory: ares-src
         run: |
+          echo "==== likely output tree ===="
+          find build -maxdepth 4 -type d | sort | sed -n '1,240p' || true
           echo "==== candidate binaries ===="
-          find . -type f | grep -Ei '(^|/)(ares)$' | sort || true
-
-          echo "==== executable files near top ===="
-          find . -maxdepth 6 -type f -executable | sort | sed -n '1,240p'
+          find build -type f | grep -Ei '(^|/)(ares|sourcery)$' | sort || true
+          echo "==== executable files ===="
+          find build -maxdepth 6 -type f -executable | sort | sed -n '1,240p'
 
           BIN_CANDIDATE=""
           for p in \
-            ./desktop-ui/out/ares \
-            ./out/ares \
-            ./ares \
+            ./build/rundir/bin/ares \
+            ./build/bin/ares \
             ./build/ares
           do
             if [ -x "$p" ]; then
@@ -91,13 +95,10 @@ jobs:
           done
 
           if [ -z "$BIN_CANDIDATE" ]; then
-            BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(ares)$' | head -n 1 || true)"
+            BIN_CANDIDATE="$(find build -type f -executable | grep -Ei '(^|/)(ares)$' | head -n 1 || true)"
           fi
           if [ -z "$BIN_CANDIDATE" ]; then
-            BIN_CANDIDATE="$(find . -maxdepth 6 -type f -executable | head -n 1 || true)"
-          fi
-          if [ -z "$BIN_CANDIDATE" ]; then
-            echo "No executable found"
+            echo "No ares executable found"
             exit 1
           fi
 
@@ -118,11 +119,12 @@ jobs:
         run: |
           rm -rf bundle
           mkdir -p bundle/bin
+          mkdir -p bundle/share
+
           cp -a "$ARES_BIN" bundle/bin/ares
 
-          if [ -d ares/Shaders ]; then
-            mkdir -p bundle/Shaders
-            cp -a ares/Shaders/. bundle/Shaders/
+          if [ -d build/rundir/share ]; then
+            cp -a build/rundir/share/. bundle/share/
           fi
 
           if [ -f LICENSE ]; then
@@ -130,7 +132,7 @@ jobs:
           fi
 
           echo "==== bundle tree ===="
-          find bundle -maxdepth 5 -type f | sort | sed -n '1,300p'
+          find bundle -maxdepth 6 -type f | sort | sed -n '1,400p'
 
       - name: Prepare wrapper
         working-directory: ares-src
