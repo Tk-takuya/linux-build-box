@@ -1,0 +1,132 @@
+name: build-fbneo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v5
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+
+      - name: Clone FBNeo source
+        run: |
+          git clone --recursive https://github.com/finalburnneo/FBNeo.git fbneo-src
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            make \
+            perl \
+            nasm \
+            zip \
+            libsdl2-dev \
+            libsdl2-image-dev
+
+      - name: Show toolchain versions
+        run: |
+          cc --version | head -n 1
+          make --version | head -n 1
+          perl -v | sed -n '1,2p'
+          nasm -v
+          sdl2-config --version
+
+      - name: Build FBNeo SDL2
+        working-directory: fbneo-src
+        run: |
+          make clean || true
+          make sdl2 -j"$(nproc)"
+
+      - name: Locate built binary
+        working-directory: fbneo-src
+        run: |
+          echo "==== candidate binaries ===="
+          find . -type f | grep -Ei '(^|/)(fbneo|finalburn|fbneo64|fbneo-sdl2)$' | sort || true
+
+          echo "==== executable files near top ===="
+          find . -maxdepth 4 -type f -executable | sort | sed -n '1,240p'
+
+          BIN_CANDIDATE="$(find . -type f -executable | grep -Ei '(^|/)(fbneo|finalburn|fbneo64|fbneo-sdl2)$' | head -n 1 || true)"
+          if [ -z "$BIN_CANDIDATE" ]; then
+            BIN_CANDIDATE="$(find . -maxdepth 4 -type f -executable | head -n 1 || true)"
+          fi
+          if [ -z "$BIN_CANDIDATE" ]; then
+            echo "No executable found"
+            exit 1
+          fi
+          echo "FBNEO_BIN=$BIN_CANDIDATE" >> "$GITHUB_ENV"
+          echo "Selected binary: $BIN_CANDIDATE"
+
+      - name: Inspect built binary
+        working-directory: fbneo-src
+        run: |
+          echo "Using: $FBNEO_BIN"
+          file "$FBNEO_BIN"
+          ldd "$FBNEO_BIN" | tee fbneo_ldd.log || true
+          echo "---- not found only ----"
+          grep "not found" fbneo_ldd.log || true
+
+      - name: Prepare portable bundle
+        working-directory: fbneo-src
+        run: |
+          rm -rf bundle
+          mkdir -p bundle/bin
+          cp -a "$FBNEO_BIN" bundle/bin/
+
+          if [ -d support ]; then
+            mkdir -p bundle/support
+            cp -a support/. bundle/support/
+          fi
+
+          if [ -d config ]; then
+            mkdir -p bundle/config
+            cp -a config/. bundle/config/
+          fi
+
+          if [ -d previews ]; then
+            mkdir -p bundle/previews
+            cp -a previews/. bundle/previews/
+          fi
+
+          find bundle -maxdepth 5 -type f | sort | sed -n '1,300p'
+
+      - name: Prepare wrapper
+        working-directory: fbneo-src
+        run: |
+          cat > bundle/run-fbneo.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          exec "$HERE/bin/$(basename "$FBNEO_BIN")" "$@"
+          EOF
+          chmod +x bundle/run-fbneo.sh
+
+      - name: Upload artifact bundle dir
+        uses: actions/upload-artifact@v6
+        with:
+          name: fbneo_linux_x86_64_bundle_dir
+          path: fbneo-src/bundle
+          if-no-files-found: error
+
+      - name: Pack bundle zip
+        working-directory: fbneo-src
+        run: |
+          cd bundle
+          zip -r ../fbneo_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: fbneo_linux_x86_64_bundle_zip
+          path: fbneo-src/fbneo_linux_x86_64_bundle.zip
+          if-no-files-found: error
