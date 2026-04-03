@@ -67,9 +67,22 @@ jobs:
       - name: Smoke test installed binaries
         working-directory: rizin-src
         run: |
-          test -x out/bin/rizin || test -x out/bin/rizin.exe || true
-          out/bin/rizin -v || true
           out/bin/rz-bin -v
           out/bin/rz-asm -v
           out/bin/rz-diff -v
           out/bin/rz-ax -v
+
+      - name: Pack bundle
+        working-directory: rizin-src
+        run: |
+          mkdir -p bundle
+          cp -a out/. bundle/
+          cd bundle
+          zip -r ../rizin_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: rizin_linux_x86_64_bundle
+          path: rizin-src/rizin_linux_x86_64_bundle.zip
+          if-no-files-found: error
