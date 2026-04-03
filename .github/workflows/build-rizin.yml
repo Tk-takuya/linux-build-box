@@ -40,3 +40,17 @@ jobs:
           ninja --version
           pkg-config --version
           git --version
+
+      - name: Configure Rizin
+        working-directory: rizin-src
+        run: |
+          meson setup build \
+            --buildtype=release \
+            --prefix="$PWD/out"
+
+      - name: Show configure result
+        working-directory: rizin-src
+        run: |
+          test -d build
+          test -f build/build.ninja
+          ls -la build | sed -n '1,120p'
