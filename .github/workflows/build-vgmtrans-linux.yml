@@ -1,4 +1,4 @@
-name: build-vgmtrans-linux-gui-aqt
+name: build-vgmtrans-linux-gui-selfcontained
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     env:
       QT_VERSION: 6.9.3
@@ -35,6 +35,8 @@ jobs:
           : > "$GITHUB_WORKSPACE/build_tail_200.txt"
           : > "$GITHUB_WORKSPACE/build_tail_60.txt"
           : > "$GITHUB_WORKSPACE/smoke_test.log"
+          : > "$GITHUB_WORKSPACE/bundle_layout.log"
+          : > "$GITHUB_WORKSPACE/bundle_ldd.log"
 
       - name: Clone VGMTrans
         run: |
@@ -314,65 +316,111 @@ jobs:
             fi
           fi
 
-      - name: Inspect installed bundle
+      - name: Assemble self-contained bundle
         if: success()
         run: |
           set -euxo pipefail
-          find "$GITHUB_WORKSPACE/out" -maxdepth 6 -type f | sort
-          file "$GITHUB_WORKSPACE"/out/bin/* || true
+          echo "Assemble self-contained bundle: start" >> "$GITHUB_WORKSPACE/step_status.log"
 
-      - name: Show dynamic deps
-        if: success()
-        run: |
-          set -euxo pipefail
-          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans" ]; then
-            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans" || true
-          fi
-          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
-            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" || true
-          fi
-          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
-            ldd "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" || true
-          fi
+          BUNDLE_ROOT="$GITHUB_WORKSPACE/vgmtrans_linux_x86_64_gui_selfcontained_bundle"
+          rm -rf "$BUNDLE_ROOT"
+          mkdir -p "$BUNDLE_ROOT/bin" "$BUNDLE_ROOT/lib"
 
-      - name: Verify CLI
-        if: success()
-        run: |
-          set -euxo pipefail
-          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" ]; then
-            "$GITHUB_WORKSPACE/out/bin/vgmtrans-cli" --help || true
+          cp -a "$GITHUB_WORKSPACE/out/bin/." "$BUNDLE_ROOT/bin/"
+          if [ -d "$GITHUB_WORKSPACE/out/lib" ]; then
+            mkdir -p "$BUNDLE_ROOT/lib"
+            cp -a "$GITHUB_WORKSPACE/out/lib/." "$BUNDLE_ROOT/lib/"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/out/share" ]; then
+            mkdir -p "$BUNDLE_ROOT/share"
+            cp -a "$GITHUB_WORKSPACE/out/share/." "$BUNDLE_ROOT/share/"
           fi
 
-      - name: Verify shell presence
-        if: success()
-        run: |
-          set -euxo pipefail
-          if [ -f "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" ]; then
-            "$GITHUB_WORKSPACE/out/bin/vgmtrans-shell" --help || true
+          cp -a "$QT_ROOT/plugins" "$BUNDLE_ROOT/"
+          cp -Lv "$ICU73_LIBDIR"/libicu*.so.73 "$BUNDLE_ROOT/lib/"
+
+          if [ -d "$GITHUB_WORKSPACE/vgmtrans-src/lib/bass" ]; then
+            cp -Lv "$GITHUB_WORKSPACE/vgmtrans-src/lib/bass"/libbass*.so "$BUNDLE_ROOT/lib/" || true
           fi
 
-      - name: Smoke test GUI
+          for pass in 1 2 3 4 5; do
+            : > "$RUNNER_TEMP/deps.list"
+            while IFS= read -r f; do
+              ldd "$f" 2>/dev/null | awk '
+                /=> \// {print $3}
+                /^\/[^ ]+/ {print $1}
+              ' >> "$RUNNER_TEMP/deps.list" || true
+            done < <(find "$BUNDLE_ROOT/bin" "$BUNDLE_ROOT/lib" "$BUNDLE_ROOT/plugins" -type f \( -perm -111 -o -name '*.so' -o -name '*.so.*' \) | sort)
+
+            sort -u "$RUNNER_TEMP/deps.list" | while IFS= read -r lib; do
+              [ -f "$lib" ] || continue
+              base="$(basename "$lib")"
+              case "$base" in
+                ld-linux*|libc.so*|libm.so*|libpthread.so*|librt.so*|libdl.so*|libresolv.so*|libutil.so*|libnsl.so*|libanl.so*)
+                  continue
+                  ;;
+              esac
+              dest="$BUNDLE_ROOT/lib/$base"
+              if [ ! -e "$dest" ]; then
+                cp -Lv "$lib" "$dest"
+              fi
+            done
+          done
+
+          cat > "$BUNDLE_ROOT/run-vgmtrans.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          export QT_PLUGIN_PATH="$HERE/plugins"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/plugins/platforms"
+          export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+          exec "$HERE/bin/vgmtrans" "$@"
+          EOF
+          chmod +x "$BUNDLE_ROOT/run-vgmtrans.sh"
+
+          cat > "$BUNDLE_ROOT/run-vgmtrans-cli.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          exec "$HERE/bin/vgmtrans-cli" "$@"
+          EOF
+          chmod +x "$BUNDLE_ROOT/run-vgmtrans-cli.sh"
+
+          cat > "$BUNDLE_ROOT/run-vgmtrans-shell.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
+          exec "$HERE/bin/vgmtrans-shell" "$@"
+          EOF
+          chmod +x "$BUNDLE_ROOT/run-vgmtrans-shell.sh"
+
+          {
+            echo "=== bundle tree ==="
+            find "$BUNDLE_ROOT" -maxdepth 4 | sort
+          } 2>&1 | tee "$GITHUB_WORKSPACE/bundle_layout.log"
+
+          {
+            echo "=== ldd: bundled gui ==="
+            ldd "$BUNDLE_ROOT/bin/vgmtrans" || true
+            echo "=== ldd: wrapper target libs ==="
+            ldd "$BUNDLE_ROOT/plugins/platforms/"*.so || true
+          } 2>&1 | tee "$GITHUB_WORKSPACE/bundle_ldd.log"
+
+          echo "BUNDLE_ROOT=$BUNDLE_ROOT" >> "$GITHUB_ENV"
+          echo "Assemble self-contained bundle: done" >> "$GITHUB_WORKSPACE/step_status.log"
+
+      - name: Smoke test self-contained GUI bundle
         if: success()
         run: |
           set -o pipefail
           echo "Smoke test GUI: start" >> "$GITHUB_WORKSPACE/step_status.log"
 
-          GUI_RUN="$(find "$GITHUB_WORKSPACE/vgmtrans-src/build/linux-x64" -type f -name 'vgmtrans' | sort | head -n 1)"
-          test -n "$GUI_RUN"
-          test -f "$GUI_RUN"
-
-          export LD_LIBRARY_PATH="$ICU73_LIBDIR:$QT_ROOT/lib:$GITHUB_WORKSPACE/vgmtrans-src/lib/bass${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
-          export QT_PLUGIN_PATH="$QT_ROOT/plugins"
-          export QT_QPA_PLATFORM_PLUGIN_PATH="$QT_ROOT/plugins/platforms"
-          export QT_QPA_PLATFORM=xcb
-
           {
-            echo "GUI_RUN=$GUI_RUN"
-            echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-            echo "QT_PLUGIN_PATH=$QT_PLUGIN_PATH"
-            echo "QT_QPA_PLATFORM_PLUGIN_PATH=$QT_QPA_PLATFORM_PLUGIN_PATH"
-            ldd "$GUI_RUN" || true
-            ls -la "$QT_ROOT/plugins/platforms" || true
+            test -d "$BUNDLE_ROOT"
+            test -x "$BUNDLE_ROOT/run-vgmtrans.sh"
 
             Xvfb :99 -screen 0 1280x720x24 > "$RUNNER_TEMP/xvfb.log" 2>&1 &
             XVFB_PID=$!
@@ -381,7 +429,7 @@ jobs:
             export DISPLAY=:99
 
             set +e
-            timeout 10s "$GUI_RUN" > "$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
+            timeout 10s "$BUNDLE_ROOT/run-vgmtrans.sh" > "$RUNNER_TEMP/vgmtrans_gui.log" 2>&1
             STATUS=$?
             set -e
 
@@ -402,14 +450,14 @@ jobs:
         if: success()
         run: |
           set -euxo pipefail
-          tar -C "$GITHUB_WORKSPACE/out" -czf vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz .
+          tar -C "$BUNDLE_ROOT" -czf vgmtrans_linux_x86_64_gui_selfcontained_bundle.tar.gz .
 
       - name: Upload GUI bundle artifact
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: vgmtrans_linux_x86_64_gui_nondeploy_bundle
-          path: vgmtrans_linux_x86_64_gui_nondeploy_bundle.tar.gz
+          name: vgmtrans_linux_x86_64_gui_selfcontained_bundle
+          path: vgmtrans_linux_x86_64_gui_selfcontained_bundle.tar.gz
           if-no-files-found: error
           compression-level: 0
 
@@ -430,5 +478,7 @@ jobs:
             ${{ github.workspace }}/build_tail_200.txt
             ${{ github.workspace }}/build_tail_60.txt
             ${{ github.workspace }}/smoke_test.log
+            ${{ github.workspace }}/bundle_layout.log
+            ${{ github.workspace }}/bundle_ldd.log
           if-no-files-found: error
           compression-level: 0
