@@ -1,0 +1,69 @@
+name: Build radare2 Linux x86_64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-radare2:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packages needed for build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            meson \
+            ninja-build \
+            libcapstone-dev \
+            zip \
+            xz-utils \
+            curl
+
+      - name: Download radare2 source release
+        run: |
+          curl -L -o radare2-6.1.2.tar.xz \
+            https://github.com/radareorg/radare2/releases/download/6.1.2/radare2-6.1.2.tar.xz
+          tar -xf radare2-6.1.2.tar.xz
+
+      - name: Configure build
+        run: |
+          cd radare2-6.1.2
+          meson setup builddir \
+            --buildtype=release \
+            --prefix="$GITHUB_WORKSPACE/r2-out" \
+            -Dlocal=true \
+            -Dwant_qjs=false
+
+      - name: Build
+        run: |
+          cd radare2-6.1.2
+          ninja -C builddir
+
+      - name: Install into local output folder
+        run: |
+          cd radare2-6.1.2
+          ninja -C builddir install
+
+      - name: Show versions for verification
+        run: |
+          file r2-out/bin/radare2 || true
+          r2-out/bin/radare2 -v || true
+          r2-out/bin/rabin2 -v || true
+          r2-out/bin/rasm2 -v || true
+          r2-out/bin/radiff2 -v || true
+
+      - name: Pack artifact
+        run: |
+          cd r2-out
+          zip -r ../radare2_linux_x86_64_bundle.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: radare2_linux_x86_64_bundle
+          path: radare2_linux_x86_64_bundle.zip
