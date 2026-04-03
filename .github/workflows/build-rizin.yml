@@ -15,8 +15,12 @@ jobs:
           uname -a
           lsb_release -a || cat /etc/os-release
 
-      - name: Show workspace
+      - name: Clone Rizin source
         run: |
-          pwd
+          git clone --recursive https://github.com/rizinorg/rizin.git rizin-src
+
+      - name: Show cloned tree
+        run: |
           ls -la
-          find . -maxdepth 3 -type f | sort | sed -n '1,200p'
+          ls -la rizin-src
+          find rizin-src -maxdepth 2 -type f | sort | sed -n '1,120p'
