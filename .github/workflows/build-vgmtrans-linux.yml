@@ -21,6 +21,15 @@ jobs:
       - name: Checkout workflow repo
         uses: actions/checkout@v6
 
+      - name: Prepare log placeholders
+        run: |
+          set -euxo pipefail
+          : > "$GITHUB_WORKSPACE/aqt_arch_list.txt"
+          : > "$GITHUB_WORKSPACE/aqt_install.log"
+          : > "$GITHUB_WORKSPACE/build_full.log"
+          : > "$GITHUB_WORKSPACE/build_tail_200.txt"
+          : > "$GITHUB_WORKSPACE/build_tail_60.txt"
+
       - name: Clone VGMTrans
         run: |
           set -euxo pipefail
@@ -109,7 +118,7 @@ jobs:
       - name: Define Qt paths
         run: |
           set -euxo pipefail
-          QT_ROOT="$(find "$QT_OUTPUT_DIR/$QT_VERSION" -mindepth 1 -maxdepth 2 -type d -path '*/lib/cmake/Qt6' | sed 's#/lib/cmake/Qt6##' | sort | head -n 1)"
+          QT_ROOT="$(find "$QT_OUTPUT_DIR/$QT_VERSION" -mindepth 1 -maxdepth 4 -type d -path '*/lib/cmake/Qt6' | sed 's#/lib/cmake/Qt6##' | sort | head -n 1)"
           test -n "$QT_ROOT"
           test -d "$QT_ROOT"
           test -d "$QT_ROOT/lib/cmake/Qt6"
