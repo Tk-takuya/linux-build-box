@@ -47,7 +47,6 @@ jobs:
             libasound2-dev \
             libao-dev \
             libopenal-dev \
-            libsdl3-dev \
             libpulse-dev \
             libudev-dev
 
