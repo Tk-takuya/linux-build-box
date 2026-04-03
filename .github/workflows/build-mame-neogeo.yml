@@ -16,6 +16,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            git \
             python3 \
             libsdl2-dev \
             libsdl2-ttf-dev \
@@ -25,40 +26,73 @@ jobs:
             qtbase5-dev-tools \
             qtchooser \
             qt5-qmake \
-            p7zip-full \
             zip \
-            curl \
-            file
+            file \
+            patchelf
 
-      - name: Download official MAME source package
+      - name: Clone official MAME source for 0.287
         run: |
-          curl -L -o mame0287s.exe \
-           https://github.com/mamedev/mame/releases/download/mame0287/mame0287s.exe
-
-      - name: Extract source package
-        run: |
-          mkdir mame-src
-          7z x mame0287s.exe -omame-src
+          git clone -b mame0287 --depth 1 https://github.com/mamedev/mame.git mame-src
 
       - name: Build NEOGEO subset
         run: |
           cd mame-src
           make SUBTARGET=neogeomame SOURCES=src/mame/neogeo/neogeo.cpp REGENIE=1 -j3
 
-      - name: Locate built binary and collect runtime files
+      - name: Collect binary and runtime files
         run: |
-          mkdir -p mame-out
+          mkdir -p mame-out/lib
+
           BIN_PATH="$(find mame-src -type f \( -name neogeomame -o -name 'neogeomame*' -o -name mame \) | head -n 1)"
           echo "BIN_PATH=$BIN_PATH"
           test -n "$BIN_PATH"
+
           cp "$BIN_PATH" mame-out/
           cp -r mame-src/plugins mame-out/ || true
           cp -r mame-src/hash mame-out/ || true
 
+          # Copy shared libraries actually needed by the built binary.
+          # Skip obvious base system libs that should come from the runner/system.
+          ldd "$BIN_PATH" | awk '/=> \// {print $3}' | sort -u > needed_libs.txt
+          cat needed_libs.txt
+
+          while read -r lib; do
+            base="$(basename "$lib")"
+            case "$base" in
+              linux-vdso.so.*|ld-linux*.so*|libc.so.*|libm.so.*|libstdc++.so.*|libgcc_s.so.*|libpthread.so.*|libdl.so.*|librt.so.*)
+                echo "Skipping system lib: $base"
+                ;;
+              *)
+                echo "Copying: $lib"
+                cp -Lv "$lib" mame-out/lib/
+                ;;
+            esac
+          done < needed_libs.txt
+
+      - name: Set local RUNPATH
+        run: |
+          if [ -f mame-out/neogeomame ]; then
+            patchelf --set-rpath '$ORIGIN/lib' mame-out/neogeomame
+            patchelf --print-rpath mame-out/neogeomame
+          elif [ -f mame-out/mame ]; then
+            patchelf --set-rpath '$ORIGIN/lib' mame-out/mame
+            patchelf --print-rpath mame-out/mame
+          else
+            echo "No binary found in mame-out"
+            exit 1
+          fi
+
       - name: Show verification info
         run: |
           file mame-out/* || true
-          ./mame-out/neogeomame -version || ./mame-out/mame -version || true
+          ls -la mame-out/lib || true
+          if [ -f mame-out/neogeomame ]; then
+            ldd mame-out/neogeomame || true
+            ./mame-out/neogeomame -version || true
+          else
+            ldd mame-out/mame || true
+            ./mame-out/mame -version || true
+          fi
 
       - name: Pack artifact
         run: |
