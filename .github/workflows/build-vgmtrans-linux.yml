@@ -24,6 +24,7 @@ jobs:
       - name: Prepare log placeholders
         run: |
           set -euxo pipefail
+          : > "$GITHUB_WORKSPACE/step_status.log"
           : > "$GITHUB_WORKSPACE/aqt_arch_list.txt"
           : > "$GITHUB_WORKSPACE/icu73_install.log"
           : > "$GITHUB_WORKSPACE/aqt_install.log"
@@ -37,20 +38,25 @@ jobs:
       - name: Clone VGMTrans
         run: |
           set -euxo pipefail
+          echo "Clone VGMTrans: start" >> "$GITHUB_WORKSPACE/step_status.log"
           git clone --recursive https://github.com/vgmtrans/vgmtrans.git vgmtrans-src
+          echo "Clone VGMTrans: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Sanity check source tree
         working-directory: vgmtrans-src
         run: |
           set -euxo pipefail
+          echo "Sanity check source tree: start" >> "$GITHUB_WORKSPACE/step_status.log"
           echo "PWD=$(pwd)"
           ls -la
           test -f CMakePresets.json
           git submodule status
+          echo "Sanity check source tree: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Install host dependencies
         run: |
           set -euxo pipefail
+          echo "Install host dependencies: start" >> "$GITHUB_WORKSPACE/step_status.log"
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -86,34 +92,45 @@ jobs:
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
             libxrender-dev
+          echo "Install host dependencies: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Install aqtinstall
         run: |
           set -euxo pipefail
+          echo "Install aqtinstall: start" >> "$GITHUB_WORKSPACE/step_status.log"
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade aqtinstall
+          echo "Install aqtinstall: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Check available Qt architectures
         run: |
           set -euxo pipefail
+          echo "Check available Qt architectures: start" >> "$GITHUB_WORKSPACE/step_status.log"
           python3 -m aqt list-qt "$QT_HOST" "$QT_TARGET" --arch "$QT_VERSION" | tee "$GITHUB_WORKSPACE/aqt_arch_list.txt"
+          echo "Check available Qt architectures: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Select Qt architecture
         run: |
           set -euxo pipefail
+          echo "Select Qt architecture: start" >> "$GITHUB_WORKSPACE/step_status.log"
           AQT_ARCH="$(tr ' ' '\n' < "$GITHUB_WORKSPACE/aqt_arch_list.txt" | grep -E '^(gcc_64|linux_gcc_64)$' | head -n 1)"
           test -n "$AQT_ARCH"
           echo "AQT_ARCH=$AQT_ARCH" >> "$GITHUB_ENV"
           echo "Selected AQT_ARCH=$AQT_ARCH"
+          echo "Select Qt architecture: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Install ICU 73 compatibility runtime
         run: |
           set -o pipefail
+          echo "Install ICU 73 compatibility runtime: start" >> "$GITHUB_WORKSPACE/step_status.log"
           mkdir -p "$GITHUB_WORKSPACE/icu73"
-          curl -L \
+          ICU_URL="https://snapshot.debian.org/archive/debian/20230328T180011Z/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb"
+          echo "Downloading: $ICU_URL" | tee "$GITHUB_WORKSPACE/icu73_install.log"
+          curl -fL \
             -o "$RUNNER_TEMP/libicu73.deb" \
-            "https://deb.debian.org/debian/pool/main/i/icu/libicu73_73.1~rc-1_amd64.deb" \
-            2>&1 | tee "$GITHUB_WORKSPACE/icu73_install.log"
+            "$ICU_URL" \
+            2>&1 | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
+          file "$RUNNER_TEMP/libicu73.deb" | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
           dpkg-deb -x "$RUNNER_TEMP/libicu73.deb" "$GITHUB_WORKSPACE/icu73" 2>&1 | tee -a "$GITHUB_WORKSPACE/icu73_install.log"
           ICU73_LIBDIR="$GITHUB_WORKSPACE/icu73/usr/lib/x86_64-linux-gnu"
           test -f "$ICU73_LIBDIR/libicui18n.so.73"
@@ -125,10 +142,12 @@ jobs:
           else
             echo "LD_LIBRARY_PATH=$ICU73_LIBDIR" >> "$GITHUB_ENV"
           fi
+          echo "Install ICU 73 compatibility runtime: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Install Qt with aqtinstall
         run: |
           set -o pipefail
+          echo "Install Qt with aqtinstall: start" >> "$GITHUB_WORKSPACE/step_status.log"
           mkdir -p "$QT_OUTPUT_DIR"
           export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           python3 -m aqt install-qt \
@@ -140,10 +159,12 @@ jobs:
             -m qtshadertools \
             --archives qtbase qtsvg \
             2>&1 | tee "$GITHUB_WORKSPACE/aqt_install.log"
+          echo "Install Qt with aqtinstall: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Define Qt paths
         run: |
           set -o pipefail
+          echo "Define Qt paths: start" >> "$GITHUB_WORKSPACE/step_status.log"
           QT_ROOT="$(find "$QT_OUTPUT_DIR/$QT_VERSION" -mindepth 1 -maxdepth 4 -type d -path '*/lib/cmake/Qt6' | sed 's#/lib/cmake/Qt6##' | sort | head -n 1)"
           test -n "$QT_ROOT"
           test -d "$QT_ROOT"
@@ -154,10 +175,12 @@ jobs:
             echo "Resolved QT_ROOT=$QT_ROOT"
             find "$QT_ROOT" -maxdepth 3 -type d | sort | sed -n '1,160p'
           } 2>&1 | tee "$GITHUB_WORKSPACE/qt_path.log"
+          echo "Define Qt paths: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Verify qsb runtime
         run: |
           set -o pipefail
+          echo "Verify qsb runtime: start" >> "$GITHUB_WORKSPACE/step_status.log"
           export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           {
             test -f "$QT_ROOT/bin/qsb"
@@ -165,20 +188,24 @@ jobs:
             "$QT_ROOT/bin/qsb" --help >/dev/null
             echo "qsb runtime OK"
           } 2>&1 | tee "$GITHUB_WORKSPACE/qsb_verify.log"
+          echo "Verify qsb runtime: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Show tool versions
         run: |
           set -euxo pipefail
+          echo "Show tool versions: start" >> "$GITHUB_WORKSPACE/step_status.log"
           cmake --version
           ninja --version
           g++ --version
           python3 -m aqt version
           test -d "$QT_ROOT/lib/cmake/Qt6"
+          echo "Show tool versions: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Configure
         working-directory: vgmtrans-src
         run: |
           set -o pipefail
+          echo "Configure: start" >> "$GITHUB_WORKSPACE/step_status.log"
           export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           test -f CMakePresets.json
           cmake --preset linux-x64 \
@@ -190,13 +217,16 @@ jobs:
             -DCMAKE_PREFIX_PATH="$QT_ROOT" \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/out" \
             2>&1 | tee "$GITHUB_WORKSPACE/configure.log"
+          echo "Configure: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Build
         working-directory: vgmtrans-src
         run: |
           set -o pipefail
+          echo "Build: start" >> "$GITHUB_WORKSPACE/step_status.log"
           export LD_LIBRARY_PATH="$ICU73_LIBDIR${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}"
           cmake --build --preset linux-x64-release -j"$(nproc)" --verbose 2>&1 | tee "$GITHUB_WORKSPACE/build_full.log"
+          echo "Build: done" >> "$GITHUB_WORKSPACE/step_status.log"
 
       - name: Extract build log tail
         if: always()
@@ -326,6 +356,7 @@ jobs:
         with:
           name: vgmtrans_logs
           path: |
+            ${{ github.workspace }}/step_status.log
             ${{ github.workspace }}/aqt_arch_list.txt
             ${{ github.workspace }}/icu73_install.log
             ${{ github.workspace }}/aqt_install.log
