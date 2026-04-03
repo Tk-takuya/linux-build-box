@@ -16,10 +16,10 @@ jobs:
           uname -a
           lsb_release -a || cat /etc/os-release
 
-      - name: Clone Rizin and rz-ghidra sources
+      - name: Clone compatible Rizin and rz-ghidra sources
         run: |
-          git clone --recursive --branch dev https://github.com/rizinorg/rizin.git rizin-src
-          git clone --recursive --branch dev https://github.com/rizinorg/rz-ghidra.git rz-ghidra-src
+          git clone --recursive --branch stable https://github.com/rizinorg/rizin.git rizin-src
+          git clone --recursive --branch v0.8.0 https://github.com/rizinorg/rz-ghidra.git rz-ghidra-src
 
       - name: Install build dependencies
         run: |
@@ -68,8 +68,8 @@ jobs:
         run: |
           echo "RIZIN_PREFIX=$RIZIN_PREFIX"
           find "$RIZIN_PREFIX" -maxdepth 5 -type f | sort | sed -n '1,300p'
-          echo "==== pkg-config entries ===="
           export PKG_CONFIG_PATH="$RIZIN_PREFIX/lib/pkgconfig:$RIZIN_PREFIX/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}"
+          echo "==== pkg-config entries ===="
           pkg-config --list-all | grep -i '^rz_' || true
           find "$RIZIN_PREFIX" -type f \( -name '*.pc' -o -name '*Config.cmake' -o -name '*Targets.cmake' \) | sort | sed -n '1,300p' || true
 
