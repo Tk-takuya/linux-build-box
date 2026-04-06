@@ -35,13 +35,6 @@ jobs:
             patchelf \
             zip
 
-      - name: Show tool versions
-        run: |
-          dotnet --info
-          clang --version || true
-          gcc --version || true
-          ld --version | head -n 1 || true
-
       - name: Clone Mesen2
         run: |
           rm -rf src/Mesen2
@@ -49,23 +42,50 @@ jobs:
           git clone --depth 1 --branch "${MESEN_REF}" "${MESEN_REPO}" src/Mesen2
           git -C src/Mesen2 rev-parse HEAD | tee src/Mesen2/.built_commit
 
-      - name: Build Mesen2 native (clang)
+      - name: Patch broken publish switch
+        working-directory: src/Mesen2
+        run: |
+          echo "=== before patch ==="
+          grep -RIn -- '--no-self-contained true' . || true
+
+          files="$(grep -RIl -- '--no-self-contained true' . || true)"
+          if [ -n "$files" ]; then
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              sed -i 's/--no-self-contained true/--self-contained true/g' "$f"
+            done <<< "$files"
+          fi
+
+          echo "=== after patch ==="
+          grep -RIn -- '--no-self-contained true' . || true
+          grep -RIn -- '--self-contained true' . || true
+
+      - name: Build Mesen2
         working-directory: src/Mesen2
         run: |
           make -j"$(nproc)" -O LTO=true STATICLINK=true SYSTEM_LIBEVDEV=false
 
-      - name: Resolve output path
+      - name: Resolve output paths
         run: |
-          BIN="src/Mesen2/bin/linux-x64/Release/linux-x64/publish/Mesen"
-          test -f "$BIN"
-          echo "MESEN_BIN=$BIN" >> "$GITHUB_ENV"
-          ls -l "$BIN"
+          mkdir -p out/logs
+          PUBLISH_DIR="src/Mesen2/bin/linux-x64/Release/linux-x64/publish"
+          test -d "$PUBLISH_DIR"
+          echo "PUBLISH_DIR=$PUBLISH_DIR" >> "$GITHUB_ENV"
+
+          if [ -f "$PUBLISH_DIR/Mesen" ]; then
+            echo "MESEN_BIN=$PUBLISH_DIR/Mesen" >> "$GITHUB_ENV"
+          else
+            echo "Mesen binary not found in expected path"
+            find "$PUBLISH_DIR" -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          find "$PUBLISH_DIR" -maxdepth 4 -type f | sort | tee out/logs/publish-filelist.txt
 
       - name: Collect binary inspection logs
         run: |
-          mkdir -p out/logs
           file "$MESEN_BIN" | tee out/logs/file.txt
-          ldd "$MESEN_BIN" | tee out/logs/ldd.txt
+          ldd "$MESEN_BIN" | tee out/logs/ldd.txt || true
           readelf -d "$MESEN_BIN" | tee out/logs/readelf-dynamic.txt || true
           strings "$MESEN_BIN" | grep -i hostfxr | tee out/logs/hostfxr-grep.txt || true
           strings "$MESEN_BIN" | grep -i "Microsoft.NET" | tee out/logs/dotnet-grep.txt || true
@@ -74,41 +94,46 @@ jobs:
       - name: Create bundle_dir
         run: |
           rm -rf bundle_dir
-          mkdir -p bundle_dir
+          mkdir -p bundle_dir/lib
+
           cp "$MESEN_BIN" bundle_dir/Mesen
           chmod +x bundle_dir/Mesen
+
+          # 参考ログ
+          cp src/Mesen2/.built_commit bundle_dir/MESEN2_COMMIT.txt
+          cp out/logs/* bundle_dir/
+
+          # Publish 配下の重要ネイティブ資産を回収
+          find "$PUBLISH_DIR" -type f \( \
+            -name 'MesenCore.so' -o \
+            -name 'libSkiaSharp.so' -o \
+            -name 'libHarfBuzzSharp.so' -o \
+            -name 'libAvaloniaNative.so' \
+          \) -print | tee bundle_dir/native-assets-found.txt || true
+
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            cp -f "$f" bundle_dir/lib/
+          done < bundle_dir/native-assets-found.txt
 
           cat > bundle_dir/run-mesen.sh <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
           DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}"
           exec "$DIR/Mesen" "$@"
           EOF
           chmod +x bundle_dir/run-mesen.sh
 
-          cp src/Mesen2/.built_commit bundle_dir/MESEN2_COMMIT.txt
-          cp out/logs/* bundle_dir/
-
           cat > bundle_dir/README.txt <<'EOF'
-          Mesen2 Linux native x64 build artifact.
-
-          Contents:
-          - Mesen
-          - run-mesen.sh
-          - MESEN2_COMMIT.txt
-          - file.txt
-          - ldd.txt
-          - readelf-dynamic.txt
-          - hostfxr-grep.txt
-          - dotnet-grep.txt
-          - sha256.txt
+          Mesen2 Linux x64 build artifact.
 
           Notes:
-          - This is the native Linux x64 build path.
+          - Patched broken publish syntax:
+            --no-self-contained true  ->  --self-contained true
+          - Use run-mesen.sh to launch.
           - SDL2 is still expected on the target system.
-          - Use ldd.txt to verify runtime-linked libraries.
-          - hostfxr-grep.txt / dotnet-grep.txt are included to confirm that the old
-            .NET-host style failure path is no longer present.
+          - See ldd.txt / readelf-dynamic.txt / hostfxr-grep.txt for inspection.
           EOF
 
           tar -C bundle_dir -czf mesen2-linux-native-x64-bundle.tar.gz .
