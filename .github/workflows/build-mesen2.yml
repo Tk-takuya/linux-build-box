@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
   MESEN_REPO: https://github.com/SourMesen/Mesen2.git
@@ -15,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout current repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.x
 
@@ -44,16 +45,18 @@ jobs:
 
       - name: Patch broken publish switch
         working-directory: src/Mesen2
+        shell: bash
         run: |
+          set -euo pipefail
           echo "=== before patch ==="
           grep -RIn -- '--no-self-contained true' . || true
 
           files="$(grep -RIl -- '--no-self-contained true' . || true)"
-          if [ -n "$files" ]; then
+          if [ -n "${files}" ]; then
             while IFS= read -r f; do
-              [ -n "$f" ] || continue
-              sed -i 's/--no-self-contained true/--self-contained true/g' "$f"
-            done <<< "$files"
+              [ -n "${f}" ] || continue
+              sed -i 's/--no-self-contained true/--self-contained true/g' "${f}"
+            done <<< "${files}"
           fi
 
           echo "=== after patch ==="
@@ -62,28 +65,34 @@ jobs:
 
       - name: Build Mesen2
         working-directory: src/Mesen2
+        shell: bash
         run: |
+          set -euo pipefail
           make -j"$(nproc)" -O LTO=true STATICLINK=true SYSTEM_LIBEVDEV=false
 
       - name: Resolve output paths
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p out/logs
           PUBLISH_DIR="src/Mesen2/bin/linux-x64/Release/linux-x64/publish"
-          test -d "$PUBLISH_DIR"
-          echo "PUBLISH_DIR=$PUBLISH_DIR" >> "$GITHUB_ENV"
+          test -d "${PUBLISH_DIR}"
+          echo "PUBLISH_DIR=${PUBLISH_DIR}" >> "$GITHUB_ENV"
 
-          if [ -f "$PUBLISH_DIR/Mesen" ]; then
-            echo "MESEN_BIN=$PUBLISH_DIR/Mesen" >> "$GITHUB_ENV"
+          if [ -f "${PUBLISH_DIR}/Mesen" ]; then
+            echo "MESEN_BIN=${PUBLISH_DIR}/Mesen" >> "$GITHUB_ENV"
           else
             echo "Mesen binary not found in expected path"
-            find "$PUBLISH_DIR" -maxdepth 3 -type f | sort
+            find "${PUBLISH_DIR}" -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          find "$PUBLISH_DIR" -maxdepth 4 -type f | sort | tee out/logs/publish-filelist.txt
+          find "${PUBLISH_DIR}" -maxdepth 4 -type f | sort | tee out/logs/publish-filelist.txt
 
       - name: Collect binary inspection logs
+        shell: bash
         run: |
+          set -euo pipefail
           file "$MESEN_BIN" | tee out/logs/file.txt
           ldd "$MESEN_BIN" | tee out/logs/ldd.txt || true
           readelf -d "$MESEN_BIN" | tee out/logs/readelf-dynamic.txt || true
@@ -92,18 +101,18 @@ jobs:
           sha256sum "$MESEN_BIN" | tee out/logs/sha256.txt
 
       - name: Create bundle_dir
+        shell: bash
         run: |
+          set -euo pipefail
           rm -rf bundle_dir
           mkdir -p bundle_dir/lib
 
           cp "$MESEN_BIN" bundle_dir/Mesen
           chmod +x bundle_dir/Mesen
 
-          # 参考ログ
           cp src/Mesen2/.built_commit bundle_dir/MESEN2_COMMIT.txt
           cp out/logs/* bundle_dir/
 
-          # Publish 配下の重要ネイティブ資産を回収
           find "$PUBLISH_DIR" -type f \( \
             -name 'MesenCore.so' -o \
             -name 'libSkiaSharp.so' -o \
@@ -139,13 +148,13 @@ jobs:
           tar -C bundle_dir -czf mesen2-linux-native-x64-bundle.tar.gz .
 
       - name: Upload bundle_dir
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mesen2-linux-native-x64-bundle_dir
           path: bundle_dir
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mesen2-linux-native-x64-bundle_tgz
           path: mesen2-linux-native-x64-bundle.tar.gz
