@@ -25,7 +25,7 @@
 +      snapshot.reserve(instrSet->aInstrs.size());
 +      for (auto *instr : instrSet->aInstrs) {
 +        snapshot.emplace_back(instr, instr->bank);
-+        instr->setBank(bank);
++        instr->bank = bank;
 +      }
 +      m_savedBanks.emplace(instrSet, std::move(snapshot));
 +    }
@@ -35,7 +35,7 @@
 +    for (auto &[instrSet, snapshot] : m_savedBanks) {
 +      (void)instrSet;
 +      for (auto &[instr, originalBank] : snapshot) {
-+        instr->setBank(originalBank);
++        instr->bank = originalBank;
 +      }
 +    }
 +    m_savedBanks.clear();
