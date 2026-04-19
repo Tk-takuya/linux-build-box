@@ -28,9 +28,7 @@ done
 
 if [[ -z "${SHELL_BIN}" ]]; then
   echo "ERROR: vgmtrans-shell not found in known locations." >&2
-  echo "Known candidates:" >&2
   printf '  %s\n' "${CANDIDATES[@]}" >&2
-  echo "Scanning build tree more deeply:" >&2
   find "${VGMTRANS_ROOT}/build" -maxdepth 8 -type f | sort >&2 || true
   exit 127
 fi
@@ -43,8 +41,20 @@ if [[ ! -f "${PSF_PATH}" ]]; then
 fi
 
 pushd "${OUT_DIR}" >/dev/null
-"${SHELL_BIN}" "${PSF_PATH}"
-popd >/dev/null
 
-echo "Generated files:"
-find "${OUT_DIR}" -maxdepth 3 -type f | sort
+cat > shell_commands.txt <<EOF
+load "${PSF_PATH}"
+collection list
+collection export 0 .
+quit
+EOF
+
+echo "=== shell_commands.txt ==="
+cat shell_commands.txt
+
+"${SHELL_BIN}" < shell_commands.txt | tee shell_output.txt
+
+echo "=== generated files ==="
+find . -maxdepth 3 -type f | sort
+
+popd >/dev/null
