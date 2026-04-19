@@ -1,0 +1,81 @@
+name: Xenogears FFT118 Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/xenogears_fft118_build.yml'
+      - 'xenogears/**'
+
+jobs:
+  build-and-export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout linux-build-box repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git liblzma-dev python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mido
+
+      - name: Clone upstream VGMTrans and submodules
+        run: |
+          rm -rf work
+          mkdir -p work
+          git clone https://github.com/vgmtrans/vgmtrans.git work/vgmtrans
+          cd work/vgmtrans
+          git checkout ce2b641e953589a7b30a40094a38ecdd3278580d
+          git submodule update --init --recursive
+
+      - name: Apply Xenogears FFT patches
+        run: |
+          cd work/vgmtrans
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0001-FFTSeq.h.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0002-FFTSeq.cpp.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0003-FFTInstr.cpp.patch"
+
+      - name: Configure VGMTrans shell build
+        run: |
+          cd work/vgmtrans
+          cmake --preset linux-x64 \
+            -DENABLE_UI_QT=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_SHELL=ON
+
+      - name: Build vgmtrans-shell
+        run: |
+          cd work/vgmtrans
+          cmake --build --preset linux-x64-release --target vgmtrans-shell
+
+      - name: Export Xenogears 118 baseline with patched shell
+        run: |
+          bash "$GITHUB_WORKSPACE/xenogears/scripts/run_118_export.sh" \
+            "$GITHUB_WORKSPACE/work/vgmtrans" \
+            "$GITHUB_WORKSPACE/xenogears/inputs/118 Invasion.PSF" \
+            "$GITHUB_WORKSPACE/out"
+
+      - name: Compare generated MIDI against fixed references
+        run: |
+          python3 "$GITHUB_WORKSPACE/xenogears/scripts/compare_midis.py" \
+            "$GITHUB_WORKSPACE/out/shinnyu.mid" \
+            "$GITHUB_WORKSPACE/xenogears/inputs/shinnyu_fft118_fixed.mid" \
+            "$GITHUB_WORKSPACE/xenogears/inputs/shinnyu_fixed_pc0.mid" \
+            > "$GITHUB_WORKSPACE/out/midi_compare_summary.txt"
+
+      - name: Collect build metadata
+        run: |
+          cd work/vgmtrans
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/out/upstream_commit.txt"
+          git status --short > "$GITHUB_WORKSPACE/out/upstream_git_status.txt"
+
+      - name: Upload Xenogears FFT118 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xenogears-fft118-build
+          path: |
+            out/
+            work/vgmtrans/build/linux-x64/Release/bin/vgmtrans-shell
