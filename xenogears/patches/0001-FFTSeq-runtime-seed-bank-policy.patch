@@ -1,0 +1,228 @@
+--- a/src/main/formats/FFT/FFTSeq.h
++++ b/src/main/formats/FFT/FFTSeq.h
+@@ -1,9 +1,20 @@
+ #pragma once
++#include <optional>
++#include <vector>
++#include <string>
+ #include "VGMSeq.h"
+ #include "SeqTrack.h"
+ 
+ static const unsigned char delta_time_table[] = {0, 192, 144, 96, 72, 64, 48, 36, 32, 24, 18, 16, 12, 9, 8, 6, 4, 3, 2};
+ 
++struct FFTPercussionEntry {
++  uint8_t triggerNote;
++  uint8_t program;
++  uint8_t arg3;
++  uint8_t arg4;
++  uint8_t arg5;
++};
++
+ class FFTSeq : public VGMSeq {
+  public:
+   FFTSeq(RawFile *file, uint32_t offset);
+@@ -12,10 +23,13 @@
+   bool parseHeader() override;
+   bool parseTrackPointers() override;
+   uint32_t id() const override { return assocWdsID; }
++  const FFTPercussionEntry *findPercussionEntry(uint8_t triggerNote) const;
+ 
+  protected:
+   uint16_t seqID;
+   uint16_t assocWdsID;
++  uint8_t numPercussionEntries;
++  std::vector<FFTPercussionEntry> percussionTable;
+ };
+ 
+ 
+@@ -27,6 +41,10 @@
+   bool readEvent() override;
+ 
+  public:
++  void emitRuntimeProgram(uint32_t offset, uint32_t length, uint8_t program,
++                          const std::string &sEventName = "Program Change",
++                          bool seedToTickZero = false);
++  void insertMidiProgram(uint8_t program, uint32_t absTime, bool emitBank);
+   bool bNoteOn;
+   uint32_t infiniteLoopPt;
+   uint8_t infiniteLoopOctave;
+@@ -38,4 +56,9 @@
+   uint32_t loop_end_loc[5];
+   uint8_t loop_octave[5];        //1,Sep.2009 revise
+   uint8_t loop_end_octave[5];    //1,Sep.2009 revise
++  bool percussionMode;
++  uint8_t currentBank;
++  uint8_t melodicProgram;
++  std::optional<uint8_t> activeProgram;
++  bool runtimeSeeded;
+ };
+--- a/src/main/formats/FFT/FFTSeq.cpp
++++ b/src/main/formats/FFT/FFTSeq.cpp
+@@ -5,6 +5,7 @@
+  */
+ #include "FFTSeq.h"
+ #include "FFTFormat.h"
++#include "SeqEvent.h"
+ 
+ DECLARE_FORMAT(FFT);
+ 
+@@ -34,7 +35,7 @@
+ //-----------------------------------------------------------
+   setLength(readShort(offset() + 0x08));
+   nNumTracks = readByte(offset() + 0x14);    //uint8_t (8bit)		GetWord() から修正
+-  // uint8_t cNumPercussion = GetByte(offset() + 0x15);    //uint8_t (8bit)	Quantity of Percussion struct
++  numPercussionEntries = readByte(offset() + 0x15);    //uint8_t (8bit)	Quantity of Percussion struct
+   assocWdsID = readShort(offset() + 0x16);    //uint16_t (16bit)	Default program bank No.
+   uint16_t ptSongTitle = readShort(offset() + 0x1E);    //uint16_t (16bit)	Pointer of music title (AscII strings)
+   uint16_t ptPercussionTbl = readShort(offset() + 0x20);    //uint16_t (16bit)	Pointer of Percussion struct
+@@ -62,6 +63,26 @@
+ //	if(cNumPercussion!=0){										//これ、やっぱ、いらない。
+ //		hdr->addSimpleChild(offset()+ptPercussionTbl, cNumPercussion*5, "Drumkit Struct");
+ //	}
++  if (numPercussionEntries != 0 && ptPercussionTbl != 0) {
++    VGMHeader *drumkit = addHeader(offset() + ptPercussionTbl, numPercussionEntries * 5, "Drumkit Struct");
++    percussionTable.reserve(numPercussionEntries);
++    for (uint8_t i = 0; i < numPercussionEntries; i++) {
++      uint32_t entryOffset = offset() + ptPercussionTbl + i * 5;
++      FFTPercussionEntry entry{
++        readByte(entryOffset + 0),
++        readByte(entryOffset + 1),
++        readByte(entryOffset + 2),
++        readByte(entryOffset + 3),
++        readByte(entryOffset + 4),
++      };
++      percussionTable.push_back(entry);
++      drumkit->addChild(entryOffset + 0, 1, "Trigger Note");
++      drumkit->addChild(entryOffset + 1, 1, "Program");
++      drumkit->addChild(entryOffset + 2, 1, "Arg3");
++      drumkit->addChild(entryOffset + 3, 1, "Arg4");
++      drumkit->addChild(entryOffset + 4, 1, "Arg5");
++    }
++  }
+ //-----------------------------------------------------------
+ 
+   setPPQN(0x30);
+@@ -87,6 +108,13 @@
+   return true;
+ }
+ 
++const FFTPercussionEntry *FFTSeq::findPercussionEntry(uint8_t triggerNote) const {
++  for (const auto &entry : percussionTable) {
++    if (entry.triggerNote == triggerNote)
++      return &entry;
++  }
++  return nullptr;
++}
+ 
+ //  ********
+ //  FFTTrack
+@@ -112,8 +140,36 @@
+   SeqTrack::resetVars();
+ 
+   octave = 3;
++  percussionMode = false;
++  currentBank = 0;
++  melodicProgram = 0;
++  activeProgram.reset();
++  runtimeSeeded = false;
++}
++
++void FFTTrack::insertMidiProgram(uint8_t program, uint32_t absTime, bool emitBank) {
++  if (readMode != READMODE_CONVERT_TO_MIDI || pMidiTrack == nullptr)
++    return;
++  if (emitBank)
++    pMidiTrack->insertBankSelect(channel, currentBank, absTime);
++  pMidiTrack->aEvents.push_back(new ProgChangeEvent(pMidiTrack, channel, absTime, program));
+ }
+ 
++void FFTTrack::emitRuntimeProgram(uint32_t offset, uint32_t length, uint8_t program,
++                                  const std::string &sEventName, bool seedToTickZero) {
++  activeProgram = program;
++  const uint32_t uiLength = std::max(length, 1u);
++  const bool seedNow = seedToTickZero && !runtimeSeeded;
++
++  if (readMode == READMODE_ADD_TO_UI) {
++    bool isNewOffset = onEvent(offset, uiLength);
++    recordSeqEvent<ProgChangeSeqEvent>(isNewOffset, seedNow ? 0 : getTime(), program, offset, uiLength, sEventName);
++  } else if (readMode == READMODE_CONVERT_TO_MIDI) {
++    insertMidiProgram(program, seedNow ? 0 : getTime(), seedNow);
++  }
++
++  runtimeSeeded = true;
++}
+ 
+ //--------------------------------------------------
+ //Revisions:
+@@ -135,9 +191,16 @@
+ 
+     if (iDeltaTime == 0)
+       iDeltaTime = readByte(curOffset++);        //Delta time
++    uint8_t noteNumber = octave * 12 + relative_key;
++    if (percussionMode) {
++      if (const auto *entry = static_cast<FFTSeq*>(parentSeq)->findPercussionEntry(noteNumber)) {
++        if (!activeProgram.has_value() || activeProgram.value() != entry->program)
++          emitRuntimeProgram(beginOffset, curOffset - beginOffset, entry->program, "Percussion Program Change", !runtimeSeeded);
++      }
++    }
+     if (bNoteOn)
+       addNoteOffNoItem(prevKey);
+-    addNoteOn(beginOffset, curOffset - beginOffset, octave * 12 + relative_key, vel);
++    addNoteOn(beginOffset, curOffset - beginOffset, noteNumber, vel);
+     addTime(iDeltaTime);
+ 
+     bNoteOn = true;
+@@ -306,14 +369,16 @@
+ 
+         //program change
+       case 0xAC: {
+-        uint8_t progNum = readByte(curOffset++);
+-        // to do:	Bank select(op-code:0xFE)
+-        //			Default bank number is "assocWdsID".
+-        addBankSelectNoItem(progNum / 128);
++        uint8_t rawProgNum = readByte(curOffset++);
++        currentBank = rawProgNum / 128;
++        uint8_t progNum = rawProgNum;
+         if (progNum > 127)
+           progNum %= 128;
+-        // When indicate 255 in progNum, program No.0 & bank No.254 is selected.
++        melodicProgram = progNum;
++        activeProgram = progNum;
++        addBankSelect(beginOffset, curOffset - beginOffset, currentBank);
+         addProgramChange(beginOffset, curOffset - beginOffset, progNum);
++        runtimeSeeded = true;
+         break;
+       }
+ 
+@@ -325,12 +390,16 @@
+ 
+         //Percussion On
+       case 0xAE :
++        percussionMode = true;
+         addGenericEvent(beginOffset, curOffset - beginOffset, "Percussion On", "", Type::ChangeState);
+         break;
+ 
+         //Percussion Off
+       case 0xAF:
++        percussionMode = false;
+         addGenericEvent(beginOffset, curOffset - beginOffset, "Percussion Off", "", Type::ChangeState);
++        if (activeProgram.has_value() && activeProgram.value() != melodicProgram)
++          emitRuntimeProgram(beginOffset, curOffset - beginOffset, melodicProgram, "Restore Program");
+         break;
+ 
+         //Slur On
+@@ -679,8 +748,15 @@
+         // Program(WDS) bank select
+       case 0xFE: {
+         uint8_t cProgBankNum = readByte(curOffset++);        //Bank Number [ticks]
++        currentBank = cProgBankNum;
++        parentSeq->addBankReference(currentBank);
+         desc = fmt::format(" Bank: {:d}", cProgBankNum);
+         addGenericEvent(beginOffset, curOffset - beginOffset, "Program bank select", desc, Type::ProgramChange);
++        if (activeProgram.has_value()) {
++          addBankSelect(beginOffset, curOffset - beginOffset, currentBank);
++          addProgramChange(beginOffset, curOffset - beginOffset, activeProgram.value());
++          runtimeSeeded = true;
++        }
+         break;
+       }
+ 

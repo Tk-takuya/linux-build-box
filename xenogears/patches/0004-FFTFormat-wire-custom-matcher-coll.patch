@@ -1,0 +1,16 @@
+--- a/src/main/formats/FFT/FFTFormat.h
++++ b/src/main/formats/FFT/FFTFormat.h
+@@ -1,9 +1,11 @@
+ #pragma once
+ #include "Format.h"
+-#include "GetIdMatcher.h"
+ #include "FFTScanner.h"
++#include "FFTMatcher.h"
++#include "FFTColl.h"
+ 
+ BEGIN_FORMAT(FFT)
+   USING_SCANNER(FFTScanner)
+-  USING_MATCHER(GetIdMatcher)
++  USING_MATCHER(FFTMatcher)
++  USING_COLL(FFTColl)
+ END_FORMAT()
