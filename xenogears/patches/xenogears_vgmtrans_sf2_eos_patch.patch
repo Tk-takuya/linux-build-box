@@ -1,0 +1,17 @@
+--- a/src/main/conversion/SF2File.cpp
++++ b/src/main/conversion/SF2File.cpp
+@@ -462,8 +462,12 @@
+     memcpy(shdrCk->data + (i * sizeof(sfSample)), &samp, sizeof(sfSample));
+   }
+
+-  //  add terminal sfSample
+-  memset(shdrCk->data + (numSamps * sizeof(sfSample)), 0, sizeof(sfSample));
++  //  add terminal sfSample
++  sfSample terminalSamp{};
++  memcpy(terminalSamp.achSampleName, "EOS", 3);
++  terminalSamp.wSampleLink = 0;
++  terminalSamp.sfSampleType = monoSample;
++  memcpy(shdrCk->data + (numSamps * sizeof(sfSample)), &terminalSamp, sizeof(sfSample));
+   pdtaCk->addChildChunk(shdrCk);
+
+   this->addChildChunk(pdtaCk);
