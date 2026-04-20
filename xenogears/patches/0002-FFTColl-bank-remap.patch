@@ -1,0 +1,47 @@
+--- /dev/null
++++ b/src/main/formats/FFT/FFTColl.h
+@@ -0,0 +1,44 @@
++#pragma once
++
++#include <map>
++#include <utility>
++#include <vector>
++#include "VGMColl.h"
++#include "VGMInstrSet.h"
++
++class FFTColl : public VGMColl {
++ public:
++  FFTColl() = default;
++
++  void addInstrSetWithBank(VGMInstrSet *instrSet, uint32_t bank) {
++    addInstrSet(instrSet);
++    m_bankOverrides[instrSet] = bank;
++  }
++
++  void preSynthFileCreation() const override {
++    m_savedBanks.clear();
++    for (const auto &[instrSet, bank] : m_bankOverrides) {
++      std::vector<std::pair<VGMInstr *, uint32_t>> snapshot;
++      snapshot.reserve(instrSet->aInstrs.size());
++      for (auto *instr : instrSet->aInstrs) {
++        snapshot.emplace_back(instr, instr->bank);
++        instr->bank = bank;
++      }
++      m_savedBanks.emplace(instrSet, std::move(snapshot));
++    }
++  }
++
++  void postSynthFileCreation() const override {
++    for (auto &[instrSet, snapshot] : m_savedBanks) {
++      (void)instrSet;
++      for (auto &[instr, originalBank] : snapshot) {
++        instr->bank = originalBank;
++      }
++    }
++    m_savedBanks.clear();
++  }
++
++ private:
++  mutable std::map<VGMInstrSet *, std::vector<std::pair<VGMInstr *, uint32_t>>> m_savedBanks;
++  std::map<VGMInstrSet *, uint32_t> m_bankOverrides;
++};
