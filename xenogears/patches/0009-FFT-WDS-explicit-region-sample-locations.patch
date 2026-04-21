@@ -1,0 +1,91 @@
+--- /mnt/data/xg_src_patched/src/main/formats/FFT/FFTInstr.cpp	2026-02-26 15:32:29.000000000 +0000
++++ /mnt/data/FFTInstr.cpp.0009	2026-04-21 11:58:02.586643609 +0000
+@@ -2,6 +2,43 @@
+ #include "FFTInstr.h"
+ #include "VGMSamp.h"
+ #include "PSXSPU.h"
++#include <set>
++
++namespace {
++bool isValidPSXFilterShiftByteLocal(uint8_t b) {
++  uint8_t filter = b >> 4;
++  uint8_t shift  = b & 0x0F;
++  return filter <= 4 && shift <= 0x0C;
++}
++
++bool isValidPSXFlagByteLocal(uint8_t b) {
++  return (b & 0xF8) == 0;
++}
++
++uint32_t scanFFTWdsReferencedSampleSize(const RawFile* file, uint32_t sampleStart, uint32_t hardEnd) {
++  if (sampleStart + 16 > hardEnd) {
++    return 0;
++  }
++
++  uint32_t cursor = sampleStart;
++  while (cursor + 16 <= hardEnd) {
++    uint8_t filterShift = file->readByte(cursor);
++    uint8_t flagByte = file->readByte(cursor + 1);
++
++    if (!isValidPSXFilterShiftByteLocal(filterShift) || !isValidPSXFlagByteLocal(flagByte)) {
++      return 0;
++    }
++
++    cursor += 16;
++    if (flagByte & 1) {
++      return cursor - sampleStart;
++    }
++  }
++
++  return 0;
++}
++}  // namespace
++
+ 
+ const float defaultFFTReverbPercent = 0.5;
+ 
+@@ -60,7 +97,43 @@
+   wdsHeader->addUnknownChild(offset() + 0x2C, sizeof(long));
+ 
+   //波形objectの生成
+-  sampColl = new PSXSampColl(FFTFormat::name, this, offset() + hdr.szHeader1, hdr.szSampColl);
++  // Build an explicit sample list from authoritative WDS region offsets instead of relying on
++  // generic auto-scanning. Xenogears uses two patterns that the generic PSX scanner misses:
++  //  - later samples can live after long runs of zero-filled ADPCM frames inside one logical WDS
++  //  - some instruments intentionally begin inside those zero runs to add leading silence
++  std::vector<SizeOffsetPair> vagLocations;
++  std::set<uint32_t> seenSampleOffsets;
++  const uint32_t sampBase = offset() + hdr.szHeader1;
++  const uint32_t sampEnd = sampBase + hdr.szSampColl;
++
++  for (uint32_t i = 0; i <= hdr.iNumInstrs; i++) {
++    WdsRgnData rgnData{};
++    const uint32_t rgnOffset = offset() + sizeof(WdsHdr) + (i * sizeof(WdsRgnData));
++    readBytes(rgnOffset, sizeof(WdsRgnData), &rgnData);
++
++    uint32_t relSampOffset = rgnData.ptBody;
++    if (version == VERSION_WDS) {
++      relSampOffset *= 8;
++    }
++
++    if (relSampOffset >= hdr.szSampColl) {
++      continue;
++    }
++
++    if (!seenSampleOffsets.insert(relSampOffset).second) {
++      continue;
++    }
++
++    const uint32_t absSampOffset = sampBase + relSampOffset;
++    const uint32_t sampSize = scanFFTWdsReferencedSampleSize(rawFile(), absSampOffset, sampEnd);
++    if (sampSize == 0) {
++      continue;
++    }
++
++    vagLocations.emplace_back(relSampOffset, sampSize);
++  }
++
++  sampColl = new PSXSampColl(FFTFormat::name, this, sampBase, hdr.szSampColl, vagLocations);
+ //	sampColl->Load();				//VGMInstrSet::Load()関数内でやっている。
+ //	sampColl->UseInstrSet(this);	//"WD.cpp"では、同様の事をやっている。
+ 
