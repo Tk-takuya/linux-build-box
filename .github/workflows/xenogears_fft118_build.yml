@@ -44,6 +44,7 @@ jobs:
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0004-FFTFormat-wire-custom-matcher-coll.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0005-SF2File-eos-terminal-shdr.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0007-FFT-default-bank-dual-exposure-clone.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0008-FFT-AC-preserve-current-bank.patch"
 
       - name: Configure VGMTrans shell build
         run: |
