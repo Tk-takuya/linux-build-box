@@ -1,0 +1,153 @@
+--- a/src/main/formats/FFT/FFTColl.h
++++ b/src/main/formats/FFT/FFTColl.h
+@@ -1,44 +1,104 @@
+ #pragma once
+ 
+-#include <map>
+-#include <utility>
++#include <set>
+ #include <vector>
+ #include "VGMColl.h"
+ #include "VGMInstrSet.h"
++#include "VGMRgn.h"
++#include "VGMSampColl.h"
++
++class FFTBankCloneInstr final : public VGMInstr {
++ public:
++  FFTBankCloneInstr(VGMInstrSet *instrSet, uint32_t offset, uint32_t length, uint32_t bank,
++                    uint32_t instrNum, const std::string &name, float reverb)
++      : VGMInstr(instrSet, offset, length, bank, instrNum, name, reverb) {}
++
++  ~FFTBankCloneInstr() override {
++    deleteRegions();
++  }
++};
++
++class FFTBankCloneInstrSet final : public VGMInstrSet {
++ public:
++  FFTBankCloneInstrSet(VGMInstrSet *source, uint32_t bank)
++      : VGMInstrSet(source->formatName(), source->rawFile(), source->offset(), source->length(),
++                    source->name(), nullptr) {
++    setId(source->id());
++    disableAutoAddInstrumentsAsChildren();
++
++    for (auto *srcInstr : source->aInstrs) {
++      auto *dstInstr = new FFTBankCloneInstr(this,
++                                             srcInstr->offset(),
++                                             srcInstr->length(),
++                                             bank,
++                                             srcInstr->instrNum,
++                                             srcInstr->name(),
++                                             srcInstr->reverb);
++      aInstrs.push_back(dstInstr);
++
++      for (auto *srcRgn : srcInstr->regions()) {
++        auto *dstRgn = new VGMRgn(dstInstr, srcRgn->offset(), srcRgn->length(), srcRgn->name());
++        dstRgn->keyLow = srcRgn->keyLow;
++        dstRgn->keyHigh = srcRgn->keyHigh;
++        dstRgn->velLow = srcRgn->velLow;
++        dstRgn->velHigh = srcRgn->velHigh;
++        dstRgn->unityKey = srcRgn->unityKey;
++        dstRgn->coarseTune = srcRgn->coarseTune;
++        dstRgn->fineTune = srcRgn->fineTune;
++        dstRgn->loop = srcRgn->loop;
++        dstRgn->sampNum = srcRgn->sampNum;
++        dstRgn->sampOffset = srcRgn->sampOffset;
++        dstRgn->sampDataLength = srcRgn->sampDataLength;
++        dstRgn->sampCollPtr = srcRgn->sampCollPtr != nullptr ? srcRgn->sampCollPtr : source->sampColl;
++        dstRgn->pan = srcRgn->pan;
++        dstRgn->attack_time = srcRgn->attack_time;
++        dstRgn->attack_transform = srcRgn->attack_transform;
++        dstRgn->hold_time = srcRgn->hold_time;
++        dstRgn->decay_time = srcRgn->decay_time;
++        dstRgn->sustain_level = srcRgn->sustain_level;
++        dstRgn->sustain_time = srcRgn->sustain_time;
++        dstRgn->release_transform = srcRgn->release_transform;
++        dstRgn->release_time = srcRgn->release_time;
++        dstRgn->setAttenuation(srcRgn->attenDb());
++        dstRgn->setLfoVibFreqHz(srcRgn->lfoVibFreqHz());
++        dstRgn->setLfoVibDepthCents(srcRgn->lfoVibDepthCents());
++        dstRgn->setLfoVibDelaySeconds(srcRgn->lfoVibDelaySeconds());
++        dstInstr->addRgn(dstRgn);
++      }
++    }
++  }
++
++  ~FFTBankCloneInstrSet() override {
++    sampColl = nullptr;
++    for (auto *instr : aInstrs)
++      delete instr;
++    aInstrs.clear();
++  }
++};
+ 
+ class FFTColl : public VGMColl {
+  public:
+   FFTColl() = default;
++  ~FFTColl() override {
++    for (auto *clone : m_ownedInstrSets)
++      delete clone;
++  }
+ 
+   void addInstrSetWithBank(VGMInstrSet *instrSet, uint32_t bank) {
+-    addInstrSet(instrSet);
+-    m_bankOverrides[instrSet] = bank;
+-  }
++    if (!instrSet)
++      return;
+ 
+-  void preSynthFileCreation() const override {
+-    m_savedBanks.clear();
+-    for (const auto &[instrSet, bank] : m_bankOverrides) {
+-      std::vector<std::pair<VGMInstr *, uint32_t>> snapshot;
+-      snapshot.reserve(instrSet->aInstrs.size());
+-      for (auto *instr : instrSet->aInstrs) {
+-        snapshot.emplace_back(instr, instr->bank);
+-        instr->bank = bank;
+-      }
+-      m_savedBanks.emplace(instrSet, std::move(snapshot));
++    auto *clone = new FFTBankCloneInstrSet(instrSet, bank);
++    m_ownedInstrSets.push_back(clone);
++    addInstrSet(clone);
++
++    if (instrSet->sampColl && !m_seenSampColls.contains(instrSet->sampColl)) {
++      addSampColl(instrSet->sampColl);
++      m_seenSampColls.insert(instrSet->sampColl);
+     }
+   }
+ 
+-  void postSynthFileCreation() const override {
+-    for (auto &[instrSet, snapshot] : m_savedBanks) {
+-      (void)instrSet;
+-      for (auto &[instr, originalBank] : snapshot) {
+-        instr->bank = originalBank;
+-      }
+-    }
+-    m_savedBanks.clear();
+-  }
+-
+  private:
+-  mutable std::map<VGMInstrSet *, std::vector<std::pair<VGMInstr *, uint32_t>>> m_savedBanks;
+-  std::map<VGMInstrSet *, uint32_t> m_bankOverrides;
++  std::vector<FFTBankCloneInstrSet *> m_ownedInstrSets;
++  std::set<VGMSampColl *> m_seenSampColls;
+ };
+--- a/src/main/formats/FFT/FFTMatcher.h
++++ b/src/main/formats/FFT/FFTMatcher.h
+@@ -51,9 +51,15 @@
+     auto *coll = new FFTColl();
+     coll->setName(seq->name());
+     coll->useSeq(seq);
++
++    // Bank 0 remains the canonical compatibility exposure for the default WDS.
+     coll->addInstrSetWithBank(defaultIt->second, 0);
+ 
+-    // Root-cause fix:
++    // But some sequences also emit the literal default WDS bank at runtime
++    // (e.g. lastbat=68, ajito=43). Expose the same default instrset there too.
++    if (defaultId != 0 && seq->referencedBanks().contains(static_cast<uint16_t>(defaultId)))
++      coll->addInstrSetWithBank(defaultIt->second, defaultId);
++
+     // referencedBanks() is an observational superset of runtime bank values,
+     // not a guaranteed minimal hard dependency list for collection creation.
+     // Therefore extra banks should enrich the collection when resolvable,
