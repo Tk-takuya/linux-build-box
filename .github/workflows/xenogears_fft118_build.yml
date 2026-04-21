@@ -43,11 +43,15 @@ jobs:
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0003-FFTMatcher-extra-wds-banks.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0004-FFTFormat-wire-custom-matcher-coll.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0005-SF2File-eos-terminal-shdr.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0006-Conversion-fallback-sampcoll-by-offset.patch"
 
       - name: Configure VGMTrans shell build
         run: |
           cd work/vgmtrans
-          cmake --preset linux-x64             -DENABLE_UI_QT=OFF             -DENABLE_CLI=OFF             -DENABLE_SHELL=ON
+          cmake --preset linux-x64 \
+            -DENABLE_UI_QT=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_SHELL=ON
 
       - name: Build vgmtrans-shell
         run: |
@@ -60,11 +64,16 @@ jobs:
 
       - name: Batch export all Xenogears PSFs
         run: |
-          bash "$GITHUB_WORKSPACE/xenogears/scripts/run_all_songs_export.sh"             "$GITHUB_WORKSPACE/work/vgmtrans"             "$GITHUB_WORKSPACE/xenogears/inputs/XENOGEARS.zip"             "$GITHUB_WORKSPACE/out"
+          bash "$GITHUB_WORKSPACE/xenogears/scripts/run_all_songs_export.sh" \
+            "$GITHUB_WORKSPACE/work/vgmtrans" \
+            "$GITHUB_WORKSPACE/xenogears/inputs/XENOGEARS.zip" \
+            "$GITHUB_WORKSPACE/out"
 
       - name: Summarize all-song results
         run: |
-          python3 "$GITHUB_WORKSPACE/xenogears/scripts/summarize_all_songs.py"             "$GITHUB_WORKSPACE/out/results"             "$GITHUB_WORKSPACE/out"
+          python3 "$GITHUB_WORKSPACE/xenogears/scripts/summarize_all_songs.py" \
+            "$GITHUB_WORKSPACE/out/results" \
+            "$GITHUB_WORKSPACE/out"
 
       - name: Collect build metadata
         run: |
