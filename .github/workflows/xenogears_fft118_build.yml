@@ -45,7 +45,7 @@ jobs:
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0005-SF2File-eos-terminal-shdr.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0007-FFT-default-bank-dual-exposure-clone.patch"
           patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0008-FFT-AC-preserve-current-bank.patch"
-          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0009-FFT-WDS-explicit-region-sample-locations.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/xenogears/patches/0009-FFT-WDS-explicit-region-sample-locations-v2.patch"
 
       - name: Configure VGMTrans shell build
         run: |
@@ -92,3 +92,4 @@ jobs:
             work/vgmtrans/build/linux-x64/Release/bin/vgmtrans-shell
             work/vgmtrans/build/linux-x64/src/ui/shell/Release/vgmtrans-shell
             work/vgmtrans/build/linux-x64/Release/vgmtrans-shell
+
