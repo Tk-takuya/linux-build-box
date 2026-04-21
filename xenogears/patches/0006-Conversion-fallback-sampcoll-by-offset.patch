@@ -1,0 +1,114 @@
+--- a/src/main/conversion/SF2Conversion.cpp
++++ b/src/main/conversion/SF2Conversion.cpp
+@@ -99,6 +99,21 @@
+           else
+             sampColl = finalSampColls[0];
+         }
++
++        auto matchSampleByOffset = [&](const VGMSampColl* candidate, size_t& outSampNum) -> bool {
++          if (!candidate)
++            return false;
++          for (uint32_t s = 0; s < candidate->samples.size(); s++) {
++            auto sample = candidate->samples[s];
++            if (rgn->sampOffset == sample->offset() ||
++                rgn->sampOffset == sample->offset() - candidate->offset() - candidate->sampDataOffset) {
++              if (rgn->sampDataLength != -1 && rgn->sampDataLength != sample->dataLength)
++                continue;
++              outSampNum = s;
++              return true;
++            }
++          }
++          return false;
++        };
+
+         // Determine the sample number within the rgn's associated SampColl
+         size_t realSampNum;
+@@ -114,24 +129,24 @@
+         // see sampOffset declaration in header file for more info.
+         if (rgn->sampOffset != -1) {
+-          bool bFoundIt = false;
+-          for (uint32_t s = 0; s < sampColl->samples.size(); s++) {  //for every sample
+-            auto sample = sampColl->samples[s];
+-            if (rgn->sampOffset == sample->offset() ||
+-                rgn->sampOffset == sample->offset() - sampColl->offset() - sampColl->sampDataOffset) {
+-              if (rgn->sampDataLength != -1 && rgn->sampDataLength != sample->dataLength) {
+-                continue;
+-              }
+-
+-              realSampNum = s;
+-
+-              //samples[m]->loop.loopStart = parInstrSet->aInstrs[i]->aRgns[k]->loop.loopStart;
+-              //samples[m]->loop.loopLength = (samples[m]->dataLength) - (parInstrSet->aInstrs[i]->aRgns[k]->loop.loopStart); //[aInstrs[i]->aRegions[k]->sample_num]->dwUncompSize/2) - ((aInstrs[i]->aRegions[k]->loop_point*28)/16); //to end of sample
+-              bFoundIt = true;
+-              break;
++          bool bFoundIt = matchSampleByOffset(sampColl, realSampNum);
++          if (!bFoundIt) {
++            for (const VGMSampColl* candidate : finalSampColls) {
++              if (candidate == sampColl)
++                continue;
++              if (matchSampleByOffset(candidate, realSampNum)) {
++                sampColl = candidate;
++                bFoundIt = true;
++                break;
++              }
+             }
+           }
+           if (!bFoundIt) {
+             L_ERROR("Failed matching region to a sample with offset {:#x} (Instrset "
+                     "{}, Instr {}, Region {})", rgn->sampOffset, inst, i, j);
+             realSampNum = 0;
+           }
+         }
+--- a/src/main/conversion/DLSConversion.cpp
++++ b/src/main/conversion/DLSConversion.cpp
+@@ -125,6 +125,21 @@
+         else
+           sampColl = finalSampColls[0];
+
++        auto matchSampleByOffset = [&](const VGMSampColl* candidate, size_t& outSampNum) -> bool {
++          if (!candidate)
++            return false;
++          for (uint32_t s = 0; s < candidate->samples.size(); s++) {
++            auto sample = candidate->samples[s];
++            if (rgn->sampOffset == sample->offset() ||
++                rgn->sampOffset == sample->offset() - candidate->offset() - candidate->sampDataOffset) {
++              if (rgn->sampDataLength != -1 && rgn->sampDataLength != sample->dataLength)
++                continue;
++              outSampNum = s;
++              return true;
++            }
++          }
++          return false;
++        };
++
+         // Determine the sample number within the rgn's associated SampColl
+         size_t realSampNum;
+         // If a sample offset is provided, then find the sample number based on this offset.
+@@ -139,20 +154,18 @@
+-          bool bFoundIt = false;
+-          for (uint32_t s = 0; s < sampColl->samples.size(); s++) {  //for every sample
+-            if (rgn->sampOffset == sampColl->samples[s]->offset() ||
+-                rgn->sampOffset == sampColl->samples[s]->offset() - sampColl->offset() - sampColl->sampDataOffset) {
+-              if (rgn->sampDataLength != -1 && rgn->sampDataLength != sampColl->samples[s]->dataLength) {
+-                continue;
++          bool bFoundIt = matchSampleByOffset(sampColl, realSampNum);
++          if (!bFoundIt) {
++            for (const VGMSampColl* candidate : finalSampColls) {
++              if (candidate == sampColl)
++                continue;
++              if (matchSampleByOffset(candidate, realSampNum)) {
++                sampColl = candidate;
++                bFoundIt = true;
++                break;
+               }
+-              realSampNum = s;
+-              bFoundIt = true;
+-              break;
+             }
+           }
+           if (!bFoundIt) {
+             L_ERROR("Failed matching region to a sample with offset {:#x} (Instrset "
+                     "{}, Instr {}, Region {})", rgn->sampOffset, inst, i, j);
+             realSampNum = 0;
+           }
+         }
