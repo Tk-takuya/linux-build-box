@@ -1,0 +1,24 @@
+diff --git a/src/main/formats/FFT/FFTSeq.cpp b/src/main/formats/FFT/FFTSeq.cpp
+index 9f1e8ef..9d3f3d1 100644
+--- a/src/main/formats/FFT/FFTSeq.cpp
++++ b/src/main/formats/FFT/FFTSeq.cpp
+@@ -378,13 +378,17 @@ bool FFTTrack::readEvent() {
+ 
+         //program change
+       case 0xAC: {
++        // In Xenogears/FFT, 0xFE is the explicit WDS bank selector.
++        // Keeping `currentBank = rawProgNum / 128` here clobbers banks such as FE 26
++        // back to bank 0 when AC carries a plain program number (0x0A/0x0B/0x0C, etc.),
++        // which creates impossible bank0/program10..12 sounding notes.
++        // Preserve the current bank across AC and let 0xFE remain authoritative.
+         uint8_t rawProgNum = readByte(curOffset++);
+-        currentBank = rawProgNum / 128;
+         uint8_t progNum = rawProgNum;
+         if (progNum > 127)
+           progNum %= 128;
+         melodicProgram = progNum;
+         activeProgram = progNum;
+         addBankSelect(beginOffset, curOffset - beginOffset, currentBank);
+         addProgramChange(beginOffset, curOffset - beginOffset, progNum);
+         runtimeSeeded = true;
+         break;
